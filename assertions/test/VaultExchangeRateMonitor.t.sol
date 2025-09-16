@@ -16,48 +16,48 @@ import {ERC4626} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensio
 contract TestVaultExchangeRateMonitor is CredibleTest, Test {
     EthereumVaultConnector public evc;
     VaultExchangeRateMonitor public assertion;
-    
+
     // Test vaults
     MockERC4626Vault public vault1;
     MockERC4626Vault public vault2;
     MockERC4626Vault public vault3;
-    
+
     // Test tokens
     MockERC20 public token1;
     MockERC20 public token2;
     MockERC20 public token3;
-    
+
     // Test users
     address public user1 = address(0xBEEF);
     address public user2 = address(0xCAFE);
-    
+
     // Controller vault for controlCollateral tests
     MockControllerVault public controllerVault;
 
     function setUp() public {
         // Deploy EVC
         evc = new EthereumVaultConnector();
-        
+
         // Deploy assertion
         assertion = new VaultExchangeRateMonitor();
-        
+
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
         token2 = new MockERC20("Test Token 2", "TT2");
         token3 = new MockERC20("Test Token 3", "TT3");
-        
+
         // Deploy test vaults
         vault1 = new MockERC4626Vault(token1);
         vault2 = new MockERC4626Vault(token2);
         vault3 = new MockERC4626Vault(token3);
-        
+
         // Deploy controller vault
         controllerVault = new MockControllerVault();
-        
+
         // Setup test environment
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
-        
+
         // Mint tokens to test addresses
         token1.mint(user1, 1000000e18);
         token1.mint(user2, 1000000e18);
@@ -70,11 +70,11 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
     /// @notice SCENARIO: Normal vault operation - exchange rate increases
     /// @dev This test verifies that the assertion passes when vault exchange rate increases,
     ///      which is the expected behavior during normal vault operations (deposits, yield, etc.)
-    /// 
+    ///
     /// TEST SETUP:
     /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
     /// - Batch call increases totalAssets by 100e18 (new exchange rate = 1.1)
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should pass (exchange rate increased)
     function testVaultExchangeRateMonitor_ExchangeRateIncrease_Passes() public {
         // Setup vault with initial state
@@ -100,18 +100,18 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - exchange rate increased
     }
 
     /// @notice SCENARIO: Neutral vault operation - exchange rate unchanged
     /// @dev This test verifies that the assertion passes when vault exchange rate remains the same,
     ///      which can happen during operations that don't affect the vault's asset/supply ratio
-    /// 
+    ///
     /// TEST SETUP:
     /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
     /// - Batch call performs a no-op operation (exchange rate remains 1.0)
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should pass (exchange rate unchanged)
     function testVaultExchangeRateMonitor_ExchangeRateUnchanged_Passes() public {
         // Setup vault with initial state
@@ -137,19 +137,19 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - exchange rate unchanged
     }
 
     /// @notice SCENARIO: Suspicious vault operation - exchange rate decreases without bad debt socialization
     /// @dev This test verifies that the assertion FAILS when vault exchange rate decreases
     ///      without legitimate bad debt socialization, which indicates potential malicious behavior
-    /// 
+    ///
     /// TEST SETUP:
     /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
     /// - Batch call decreases totalAssets by 100e18 (new exchange rate = 0.9)
     /// - No bad debt socialization is simulated
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should FAIL (exchange rate decreased without bad debt socialization)
     function testVaultExchangeRateMonitor_ExchangeRateDecreaseWithoutBadDebt_Fails() public {
         // Setup vault with initial state
@@ -181,12 +181,12 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
     /// @notice SCENARIO: Legitimate vault operation - exchange rate decreases with bad debt socialization
     /// @dev This test verifies that the assertion PASSES when vault exchange rate decreases
     ///      due to legitimate bad debt socialization, which is an acceptable scenario per Euler's design
-    /// 
+    ///
     /// TEST SETUP:
     /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
     /// - Batch call decreases totalAssets by 100e18 (new exchange rate = 0.9)
     /// - Bad debt socialization is simulated (legitimate reason for exchange rate decrease)
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should PASS (exchange rate decreased with legitimate bad debt socialization)
     function testVaultExchangeRateMonitor_ExchangeRateDecreaseWithBadDebt_Passes() public {
         // Setup vault with initial state
@@ -212,25 +212,25 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - exchange rate decreased but with bad debt socialization
     }
 
     /// @notice SCENARIO: Complex batch operation - multiple vaults in single batch
     /// @dev This test verifies that the assertion correctly handles batch operations
     ///      involving multiple vaults, ensuring all vaults are monitored for exchange rate changes
-    /// 
+    ///
     /// TEST SETUP:
     /// - Two vaults: vault1 (1000e18 assets/supply) and vault2 (2000e18 assets/supply)
     /// - Batch call affects both vaults: vault1 increases assets, vault2 unchanged
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should pass (both vaults have valid exchange rate changes)
     function testVaultExchangeRateMonitor_MultipleVaultsInBatch_Passes() public {
         // Setup vaults with initial state
         token1.mint(address(vault1), 1000e18);
         token2.mint(address(vault2), 1000e18);
         token3.mint(address(vault3), 1000e18);
-        
+
         vault1.setTotalAssets(1000e18);
         vault1.mint(1000e18, user1);
         vault2.setTotalAssets(1000e18);
@@ -244,12 +244,12 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
         items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 50e18);
-        
+
         items[1].targetContract = address(vault2);
         items[1].onBehalfOfAccount = user1;
         items[1].value = 0;
         items[1].data = abi.encodeWithSelector(MockERC4626Vault.noOp.selector);
-        
+
         items[2].targetContract = address(vault3);
         items[2].onBehalfOfAccount = user1;
         items[2].value = 0;
@@ -265,7 +265,7 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - all vaults have valid exchange rate changes
     }
 
@@ -275,7 +275,6 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         vault1.mint(1000e18, user1);
-
 
         // Register assertion for next transaction
         cl.assertion({
@@ -287,12 +286,9 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute single call
         vm.prank(user1);
         evc.call(
-            address(vault1),
-            user1,
-            0,
-            abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18)
         );
-        
+
         // Assertion should pass
     }
 
@@ -314,30 +310,26 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         vm.prank(user1);
         vm.expectRevert("VaultExchangeRateMonitor: Exchange rate decreased without bad debt socialization");
         evc.call(
-            address(vault1),
-            user1,
-            0,
-            abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18)
         );
     }
 
     /// @notice Test control collateral call - success case
     function testVaultExchangeRateMonitor_ControlCollateral_Passes() public {
-
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         vault1.mint(1000e18, user1);
-        
+
         // Setup controller/collateral relationships
         // 1. Enable controller for user1
         vm.prank(user1);
         evc.enableController(user1, address(controllerVault));
-        
+
         // 2. Enable collateral for user1
         vm.prank(user1);
         evc.enableCollateral(user1, address(vault1));
-        
+
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
@@ -348,12 +340,9 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute control collateral call from controller
         vm.prank(address(controllerVault));
         evc.controlCollateral(
-            address(vault1),
-            user1,
-            0,
-            abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18)
         );
-        
+
         // Assertion should pass
     }
 
@@ -363,16 +352,16 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         vault1.mint(1000e18, user1);
-        
+
         // Setup controller/collateral relationships
         // 1. Enable controller for user1
         vm.prank(user1);
         evc.enableController(user1, address(controllerVault));
-        
+
         // 2. Enable collateral for user1
         vm.prank(user1);
         evc.enableCollateral(user1, address(vault1));
-        
+
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
@@ -384,21 +373,18 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         vm.prank(address(controllerVault));
         vm.expectRevert("VaultExchangeRateMonitor: Exchange rate decreased without bad debt socialization");
         evc.controlCollateral(
-            address(vault1),
-            user1,
-            0,
-            abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18)
         );
     }
 
     /// @notice SCENARIO: Edge case - non-ERC4626 contract in batch
     /// @dev This test verifies that the assertion gracefully handles non-ERC4626 contracts
     ///      in batch operations, skipping them without causing failures
-    /// 
+    ///
     /// TEST SETUP:
     /// - Batch call targets a simple ERC20 token (not ERC4626 vault)
     /// - Token has no totalAssets() or totalSupply() functions
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should pass (non-ERC4626 contracts are skipped gracefully)
     function testVaultExchangeRateMonitor_NonERC4626Contract_Passes() public {
         // Create batch call with non-ERC4626 contract
@@ -419,18 +405,18 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call - this should work since balanceOf doesn't require ownership
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - non-ERC4626 contracts are skipped
     }
 
     /// @notice SCENARIO: Edge case - zero address in batch
     /// @dev This test verifies that the assertion gracefully handles zero addresses
     ///      in batch operations, skipping them without causing failures
-    /// 
+    ///
     /// TEST SETUP:
     /// - Batch call targets address(0) (zero address)
     /// - Zero address has no code and cannot be a vault
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should pass (zero addresses are skipped gracefully)
     function testVaultExchangeRateMonitor_ZeroAddress_Passes() public {
         // Create batch call with zero address
@@ -450,18 +436,18 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - zero addresses are skipped
     }
 
     /// @notice SCENARIO: Edge case - vault with zero total supply
     /// @dev This test verifies that the assertion gracefully handles vaults with zero total supply,
     ///      which can occur in new vaults or after complete withdrawals
-    /// 
+    ///
     /// TEST SETUP:
     /// - Vault has 0 totalAssets and 0 totalSupply (exchange rate = 0)
     /// - Batch call increases totalAssets (exchange rate remains 0)
-    /// 
+    ///
     /// EXPECTED RESULT: Assertion should pass (zero total supply is handled gracefully)
     function testVaultExchangeRateMonitor_ZeroTotalSupply_Passes() public {
         // Setup vault with zero total supply
@@ -485,7 +471,7 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-        
+
         // Assertion should pass - zero total supply is handled gracefully
     }
 }
@@ -498,34 +484,43 @@ contract MockERC4626Vault is ERC4626 {
     // Events for bad debt socialization simulation
     event Repay(address indexed account, uint256 assets);
 
-    constructor(ERC20 assetToken) ERC4626(assetToken) ERC20("Mock Vault", "MV") {}
+    constructor(
+        ERC20 assetToken
+    ) ERC4626(assetToken) ERC20("Mock Vault", "MV") {}
 
-    function setTotalAssets(uint256 assets) external {
+    function setTotalAssets(
+        uint256 assets
+    ) external {
         _totalAssets = assets;
     }
-
 
     function totalAssets() public view override returns (uint256) {
         return _totalAssets;
     }
 
-    function increaseExchangeRate(uint256 amount) external {
+    function increaseExchangeRate(
+        uint256 amount
+    ) external {
         _totalAssets += amount;
         // Keep total supply the same to increase exchange rate
     }
 
-    function decreaseExchangeRate(uint256 amount) external {
+    function decreaseExchangeRate(
+        uint256 amount
+    ) external {
         require(_totalAssets >= amount, "Insufficient assets");
         _totalAssets -= amount;
         // Keep total supply the same to decrease exchange rate
         // No events emitted - this simulates malicious exchange rate decrease
     }
 
-    function decreaseExchangeRateWithBadDebt(uint256 amount) external {
+    function decreaseExchangeRateWithBadDebt(
+        uint256 amount
+    ) external {
         require(_totalAssets >= amount, "Insufficient assets");
         _totalAssets -= amount;
         // Keep total supply the same to decrease exchange rate
-        
+
         // Emit events to simulate bad debt socialization as per Euler whitepaper:
         // - Repay event from liquidator (not address(0))
         // - Withdraw event from address(0)
@@ -561,43 +556,63 @@ contract MockERC4626Vault is ERC4626 {
         revert("Not implemented for testing");
     }
 
-    function maxDeposit(address) public pure override returns (uint256) {
+    function maxDeposit(
+        address
+    ) public pure override returns (uint256) {
         return type(uint256).max;
     }
 
-    function maxMint(address) public pure override returns (uint256) {
+    function maxMint(
+        address
+    ) public pure override returns (uint256) {
         return type(uint256).max;
     }
 
-    function maxWithdraw(address) public pure override returns (uint256) {
+    function maxWithdraw(
+        address
+    ) public pure override returns (uint256) {
         return type(uint256).max;
     }
 
-    function maxRedeem(address) public pure override returns (uint256) {
+    function maxRedeem(
+        address
+    ) public pure override returns (uint256) {
         return type(uint256).max;
     }
 
-    function previewDeposit(uint256) public pure override returns (uint256) {
+    function previewDeposit(
+        uint256
+    ) public pure override returns (uint256) {
         return 0;
     }
 
-    function previewMint(uint256) public pure override returns (uint256) {
+    function previewMint(
+        uint256
+    ) public pure override returns (uint256) {
         return 0;
     }
 
-    function previewWithdraw(uint256) public pure override returns (uint256) {
+    function previewWithdraw(
+        uint256
+    ) public pure override returns (uint256) {
         return 0;
     }
 
-    function previewRedeem(uint256) public pure override returns (uint256) {
+    function previewRedeem(
+        uint256
+    ) public pure override returns (uint256) {
         return 0;
     }
 
-    function convertToShares(uint256) public pure override returns (uint256) {
+    function convertToShares(
+        uint256
+    ) public pure override returns (uint256) {
         return 0;
     }
 
-    function convertToAssets(uint256) public pure override returns (uint256) {
+    function convertToAssets(
+        uint256
+    ) public pure override returns (uint256) {
         return 0;
     }
 }
@@ -607,7 +622,7 @@ contract MockERC4626Vault is ERC4626 {
 contract MockControllerVault {
     // Simple controller vault that can be used for controlCollateral tests
     // Implements the required checkAccountStatus function that EVC expects from controllers
-    
+
     function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
         return this.checkAccountStatus.selector;
     }
