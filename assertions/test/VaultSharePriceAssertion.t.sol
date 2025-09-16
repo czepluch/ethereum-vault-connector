@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import {CredibleTest} from "credible-std/CredibleTest.sol";
 import {Test} from "forge-std/Test.sol";
-import {VaultExchangeRateMonitor} from "../src/VaultExchangeRateMonitor.a.sol";
+import {VaultSharePriceAssertion} from "../src/VaultSharePriceAssertion.a.sol";
 import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
@@ -11,11 +11,11 @@ import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.so
 import {ERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import {ERC4626} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
 
-/// @title TestVaultExchangeRateMonitor
-/// @notice Comprehensive test suite for the VaultExchangeRateMonitor assertion
-contract TestVaultExchangeRateMonitor is CredibleTest, Test {
+/// @title TestVaultSharePriceAssertion
+/// @notice Comprehensive test suite for the VaultSharePriceAssertion assertion
+contract TestVaultSharePriceAssertion is CredibleTest, Test {
     EthereumVaultConnector public evc;
-    VaultExchangeRateMonitor public assertion;
+    VaultSharePriceAssertion public assertion;
 
     // Test vaults
     MockERC4626Vault public vault1;
@@ -39,7 +39,7 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         evc = new EthereumVaultConnector();
 
         // Deploy assertion
-        assertion = new VaultExchangeRateMonitor();
+        assertion = new VaultSharePriceAssertion();
 
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
@@ -67,60 +67,60 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         token3.mint(user2, 1000000e18);
     }
 
-    /// @notice SCENARIO: Normal vault operation - exchange rate increases
-    /// @dev This test verifies that the assertion passes when vault exchange rate increases,
+    /// @notice SCENARIO: Normal vault operation - share price increases
+    /// @dev This test verifies that the assertion passes when vault share price increases,
     ///      which is the expected behavior during normal vault operations (deposits, yield, etc.)
     ///
     /// TEST SETUP:
-    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
-    /// - Batch call increases totalAssets by 100e18 (new exchange rate = 1.1)
+    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (share price = 1.0)
+    /// - Batch call increases totalAssets by 100e18 (new share price = 1.1)
     ///
-    /// EXPECTED RESULT: Assertion should pass (exchange rate increased)
-    function testVaultExchangeRateMonitor_ExchangeRateIncrease_Passes() public {
+    /// EXPECTED RESULT: Assertion should pass (share price increased)
+    function testVaultSharePriceAssertion_SharePriceIncrease_Passes() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         // Mint shares to set totalSupply (ERC4626 manages this internally)
-        vault1.mint(1000e18, user1); // Exchange rate = 1.0
+        vault1.mint(1000e18, user1); // Share price = 1.0
 
-        // Create batch call that increases exchange rate
+        // Create batch call that increases share price
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 100e18);
 
         // Register assertion for the batch call (this will trigger on the next call)
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
 
-        // Assertion should pass - exchange rate increased
+        // Assertion should pass - share price increased
     }
 
-    /// @notice SCENARIO: Neutral vault operation - exchange rate unchanged
-    /// @dev This test verifies that the assertion passes when vault exchange rate remains the same,
+    /// @notice SCENARIO: Neutral vault operation - share price unchanged
+    /// @dev This test verifies that the assertion passes when vault share price remains the same,
     ///      which can happen during operations that don't affect the vault's asset/supply ratio
     ///
     /// TEST SETUP:
-    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
-    /// - Batch call performs a no-op operation (exchange rate remains 1.0)
+    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (share price = 1.0)
+    /// - Batch call performs a no-op operation (share price remains 1.0)
     ///
-    /// EXPECTED RESULT: Assertion should pass (exchange rate unchanged)
-    function testVaultExchangeRateMonitor_ExchangeRateUnchanged_Passes() public {
+    /// EXPECTED RESULT: Assertion should pass (share price unchanged)
+    function testVaultSharePriceAssertion_SharePriceUnchanged_Passes() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         // Mint shares to set totalSupply (ERC4626 manages this internally)
-        vault1.mint(1000e18, user1); // Exchange rate = 1.0
+        vault1.mint(1000e18, user1); // Share price = 1.0
 
-        // Create batch call that doesn't change exchange rate
+        // Create batch call that doesn't change share price
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
@@ -130,102 +130,102 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
 
-        // Assertion should pass - exchange rate unchanged
+        // Assertion should pass - share price unchanged
     }
 
-    /// @notice SCENARIO: Suspicious vault operation - exchange rate decreases without bad debt socialization
-    /// @dev This test verifies that the assertion FAILS when vault exchange rate decreases
+    /// @notice SCENARIO: Suspicious vault operation - share price decreases without bad debt socialization
+    /// @dev This test verifies that the assertion FAILS when vault share price decreases
     ///      without legitimate bad debt socialization, which indicates potential malicious behavior
     ///
     /// TEST SETUP:
-    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
-    /// - Batch call decreases totalAssets by 100e18 (new exchange rate = 0.9)
+    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (share price = 1.0)
+    /// - Batch call decreases totalAssets by 100e18 (new share price = 0.9)
     /// - No bad debt socialization is simulated
     ///
-    /// EXPECTED RESULT: Assertion should FAIL (exchange rate decreased without bad debt socialization)
-    function testVaultExchangeRateMonitor_ExchangeRateDecreaseWithoutBadDebt_Fails() public {
+    /// EXPECTED RESULT: Assertion should FAIL (share price decreased without bad debt socialization)
+    function testVaultSharePriceAssertion_SharePriceDecreaseWithoutBadDebt_Fails() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         // Mint shares to set totalSupply (ERC4626 manages this internally)
-        vault1.mint(1000e18, user1); // Exchange rate = 1.0
+        vault1.mint(1000e18, user1); // Share price = 1.0
 
-        // Create batch call that decreases exchange rate without bad debt socialization
+        // Create batch call that decreases share price without bad debt socialization
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18);
 
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call - should fail
         vm.prank(user1);
-        vm.expectRevert("VaultExchangeRateMonitor: Exchange rate decreased without bad debt socialization");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.batch(items);
     }
 
-    /// @notice SCENARIO: Legitimate vault operation - exchange rate decreases with bad debt socialization
-    /// @dev This test verifies that the assertion PASSES when vault exchange rate decreases
+    /// @notice SCENARIO: Legitimate vault operation - share price decreases with bad debt socialization
+    /// @dev This test verifies that the assertion PASSES when vault share price decreases
     ///      due to legitimate bad debt socialization, which is an acceptable scenario per Euler's design
     ///
     /// TEST SETUP:
-    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (exchange rate = 1.0)
-    /// - Batch call decreases totalAssets by 100e18 (new exchange rate = 0.9)
-    /// - Bad debt socialization is simulated (legitimate reason for exchange rate decrease)
+    /// - Vault starts with 1000e18 totalAssets and 1000e18 totalSupply (share price = 1.0)
+    /// - Batch call decreases totalAssets by 100e18 (new share price = 0.9)
+    /// - Bad debt socialization is simulated (legitimate reason for share price decrease)
     ///
-    /// EXPECTED RESULT: Assertion should PASS (exchange rate decreased with legitimate bad debt socialization)
-    function testVaultExchangeRateMonitor_ExchangeRateDecreaseWithBadDebt_Passes() public {
+    /// EXPECTED RESULT: Assertion should PASS (share price decreased with legitimate bad debt socialization)
+    function testVaultSharePriceAssertion_SharePriceDecreaseWithBadDebt_Passes() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
         // Mint shares to set totalSupply (ERC4626 manages this internally)
-        vault1.mint(1000e18, user1); // Exchange rate = 1.0
+        vault1.mint(1000e18, user1); // Share price = 1.0
 
-        // Create batch call that decreases exchange rate with bad debt socialization
+        // Create batch call that decreases share price with bad debt socialization
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRateWithBadDebt.selector, 100e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseSharePriceWithBadDebt.selector, 100e18);
 
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
 
-        // Assertion should pass - exchange rate decreased but with bad debt socialization
+        // Assertion should pass - share price decreased but with bad debt socialization
     }
 
     /// @notice SCENARIO: Complex batch operation - multiple vaults in single batch
     /// @dev This test verifies that the assertion correctly handles batch operations
-    ///      involving multiple vaults, ensuring all vaults are monitored for exchange rate changes
+    ///      involving multiple vaults, ensuring all vaults are monitored for share price changes
     ///
     /// TEST SETUP:
     /// - Two vaults: vault1 (1000e18 assets/supply) and vault2 (2000e18 assets/supply)
     /// - Batch call affects both vaults: vault1 increases assets, vault2 unchanged
     ///
-    /// EXPECTED RESULT: Assertion should pass (both vaults have valid exchange rate changes)
-    function testVaultExchangeRateMonitor_MultipleVaultsInBatch_Passes() public {
+    /// EXPECTED RESULT: Assertion should pass (both vaults have valid share price changes)
+    function testVaultSharePriceAssertion_MultipleVaultsInBatch_Passes() public {
         // Setup vaults with initial state
         token1.mint(address(vault1), 1000e18);
         token2.mint(address(vault2), 1000e18);
@@ -243,7 +243,7 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 50e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 50e18);
 
         items[1].targetContract = address(vault2);
         items[1].onBehalfOfAccount = user1;
@@ -253,24 +253,24 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         items[2].targetContract = address(vault3);
         items[2].onBehalfOfAccount = user1;
         items[2].value = 0;
-        items[2].data = abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 25e18);
+        items[2].data = abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 25e18);
 
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
 
-        // Assertion should pass - all vaults have valid exchange rate changes
+        // Assertion should pass - all vaults have valid share price changes
     }
 
     /// @notice Test single call to vault - success case
-    function testVaultExchangeRateMonitor_SingleCall_Passes() public {
+    function testVaultSharePriceAssertion_SingleCall_Passes() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
@@ -279,21 +279,21 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionCallExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionCallSharePriceInvariant.selector
         });
 
         // Execute single call
         vm.prank(user1);
         evc.call(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 100e18)
         );
 
         // Assertion should pass
     }
 
     /// @notice Test single call to vault - failure case
-    function testVaultExchangeRateMonitor_SingleCall_Fails() public {
+    function testVaultSharePriceAssertion_SingleCall_Fails() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
@@ -302,20 +302,20 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionCallExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionCallSharePriceInvariant.selector
         });
 
-        // Execute single call that decreases exchange rate without bad debt socialization
+        // Execute single call that decreases share price without bad debt socialization
         vm.prank(user1);
-        vm.expectRevert("VaultExchangeRateMonitor: Exchange rate decreased without bad debt socialization");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.call(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
     }
 
     /// @notice Test control collateral call - success case
-    function testVaultExchangeRateMonitor_ControlCollateral_Passes() public {
+    function testVaultSharePriceAssertion_ControlCollateral_Passes() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
@@ -333,21 +333,21 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionControlCollateralExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionControlCollateralSharePriceInvariant.selector
         });
 
         // Execute control collateral call from controller
         vm.prank(address(controllerVault));
         evc.controlCollateral(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 100e18)
         );
 
         // Assertion should pass
     }
 
     /// @notice Test control collateral call - failure case
-    function testVaultExchangeRateMonitor_ControlCollateral_Fails() public {
+    function testVaultSharePriceAssertion_ControlCollateral_Fails() public {
         // Setup vault with initial state
         token1.mint(address(vault1), 1000e18);
         vault1.setTotalAssets(1000e18);
@@ -365,15 +365,15 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionControlCollateralExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionControlCollateralSharePriceInvariant.selector
         });
 
-        // Execute control collateral call that decreases exchange rate without bad debt socialization
+        // Execute control collateral call that decreases share price without bad debt socialization
         vm.prank(address(controllerVault));
-        vm.expectRevert("VaultExchangeRateMonitor: Exchange rate decreased without bad debt socialization");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.controlCollateral(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseExchangeRate.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
     }
 
@@ -386,7 +386,7 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
     /// - Token has no totalAssets() or totalSupply() functions
     ///
     /// EXPECTED RESULT: Assertion should pass (non-ERC4626 contracts are skipped gracefully)
-    function testVaultExchangeRateMonitor_NonERC4626Contract_Passes() public {
+    function testVaultSharePriceAssertion_NonERC4626Contract_Passes() public {
         // Create batch call with non-ERC4626 contract
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(token1); // ERC20 token, not ERC4626
@@ -398,8 +398,8 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call - this should work since balanceOf doesn't require ownership
@@ -418,7 +418,7 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
     /// - Zero address has no code and cannot be a vault
     ///
     /// EXPECTED RESULT: Assertion should pass (zero addresses are skipped gracefully)
-    function testVaultExchangeRateMonitor_ZeroAddress_Passes() public {
+    function testVaultSharePriceAssertion_ZeroAddress_Passes() public {
         // Create batch call with zero address
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(0);
@@ -429,8 +429,8 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call
@@ -445,14 +445,14 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
     ///      which can occur in new vaults or after complete withdrawals
     ///
     /// TEST SETUP:
-    /// - Vault has 0 totalAssets and 0 totalSupply (exchange rate = 0)
-    /// - Batch call increases totalAssets (exchange rate remains 0)
+    /// - Vault has 0 totalAssets and 0 totalSupply (share price = 0)
+    /// - Batch call increases totalAssets (share price remains 0)
     ///
     /// EXPECTED RESULT: Assertion should pass (zero total supply is handled gracefully)
-    function testVaultExchangeRateMonitor_ZeroTotalSupply_Passes() public {
+    function testVaultSharePriceAssertion_ZeroTotalSupply_Passes() public {
         // Setup vault with zero total supply
         vault1.setTotalAssets(0);
-        // No shares minted, so totalSupply = 0 (Exchange rate = 0)
+        // No shares minted, so totalSupply = 0 (Share price = 0)
 
         // Create batch call
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
@@ -464,8 +464,8 @@ contract TestVaultExchangeRateMonitor is CredibleTest, Test {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateMonitor).creationCode,
-            fnSelector: VaultExchangeRateMonitor.assertionBatchExchangeRateInvariant.selector
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
         // Execute batch call
@@ -498,28 +498,28 @@ contract MockERC4626Vault is ERC4626 {
         return _totalAssets;
     }
 
-    function increaseExchangeRate(
+    function increaseSharePrice(
         uint256 amount
     ) external {
         _totalAssets += amount;
-        // Keep total supply the same to increase exchange rate
+        // Keep total supply the same to increase share price
     }
 
-    function decreaseExchangeRate(
+    function decreaseSharePrice(
         uint256 amount
     ) external {
         require(_totalAssets >= amount, "Insufficient assets");
         _totalAssets -= amount;
-        // Keep total supply the same to decrease exchange rate
-        // No events emitted - this simulates malicious exchange rate decrease
+        // Keep total supply the same to decrease share price
+        // No events emitted - this simulates malicious share price decrease
     }
 
-    function decreaseExchangeRateWithBadDebt(
+    function decreaseSharePriceWithBadDebt(
         uint256 amount
     ) external {
         require(_totalAssets >= amount, "Insufficient assets");
         _totalAssets -= amount;
-        // Keep total supply the same to decrease exchange rate
+        // Keep total supply the same to decrease share price
 
         // Emit events to simulate bad debt socialization as per Euler whitepaper:
         // - Repay event from liquidator (not address(0))

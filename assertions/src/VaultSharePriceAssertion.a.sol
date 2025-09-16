@@ -5,26 +5,26 @@ import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 
-/// @title VaultExchangeRateMonitor
-/// @notice Monitors vault exchange rates and ensures they don't decrease unless bad debt socialization occurs
+/// @title VaultSharePriceAssertion
+/// @notice Monitors vault share prices and ensures they don't decrease unless bad debt socialization occurs
 /// @dev This assertion intercepts EVC calls to monitor all vault interactions and validates
-///      that vault exchange rates (totalAssets/totalSupply) don't decrease unless there's a
+///      that vault share prices (totalAssets/totalSupply) don't decrease unless there's a
 ///      legitimate bad debt socialization event.
 ///
-/// @custom:invariant VAULT_EXCHANGE_RATE_INVARIANT
+/// @custom:invariant VAULT_SHARE_PRICE_INVARIANT
 /// For any vault V and any transaction T that interacts with V:
 ///
 /// Let:
-/// - ER_pre(V) = totalAssets(V) * 1e18 / totalSupply(V) before transaction T
-/// - ER_post(V) = totalAssets(V) * 1e18 / totalSupply(V) after transaction T
+/// - SP_pre(V) = totalAssets(V) * 1e18 / totalSupply(V) before transaction T
+/// - SP_post(V) = totalAssets(V) * 1e18 / totalSupply(V) after transaction T
 /// - BDS(T,V) = true if bad debt socialization events occurred for vault V in transaction T
 ///
 /// Then the following invariant must hold:
 ///
-/// ER_post(V) >= ER_pre(V) ∨ BDS(T,V)
+/// SP_post(V) >= SP_pre(V) ∨ BDS(T,V)
 ///
 /// In plain English:
-/// "A vault's exchange rate cannot decrease unless bad debt socialization occurs"
+/// "A vault's share price cannot decrease unless bad debt socialization occurs"
 ///
 /// Bad debt socialization is detected by monitoring the following events from vault V:
 /// 1. Repay(account, assets) where account ≠ address(0) (repay from liquidator)
@@ -34,38 +34,38 @@ import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 ///
 /// This invariant protects depositors from:
 /// - Malicious vault implementations that steal funds
-/// - Protocol bugs that cause unexpected exchange rate decreases
+/// - Protocol bugs that cause unexpected share price decreases
 /// - Economic attacks that drain vault value
 ///
 /// While allowing legitimate scenarios:
 /// - Normal vault operations (deposits, withdrawals, yield)
 /// - Bad debt socialization (as designed in Euler protocol)
-contract VaultExchangeRateMonitor is Assertion {
+contract VaultSharePriceAssertion is Assertion {
     /// @notice Register triggers for EVC operations
     function triggers() external view override {
         // Register triggers for each call type
-        registerCallTrigger(this.assertionBatchExchangeRateInvariant.selector, IEVC.batch.selector);
-        registerCallTrigger(this.assertionCallExchangeRateInvariant.selector, IEVC.call.selector);
+        registerCallTrigger(this.assertionBatchSharePriceInvariant.selector, IEVC.batch.selector);
+        registerCallTrigger(this.assertionCallSharePriceInvariant.selector, IEVC.call.selector);
         registerCallTrigger(
-            this.assertionControlCollateralExchangeRateInvariant.selector, IEVC.controlCollateral.selector
+            this.assertionControlCollateralSharePriceInvariant.selector, IEVC.controlCollateral.selector
         );
     }
 
     /// @notice Assertion for batch operations
-    /// @dev INVARIANT: Vault exchange rates cannot decrease unless there's legitimate bad debt socialization
+    /// @dev INVARIANT: Vault share prices cannot decrease unless there's legitimate bad debt socialization
     ///
     /// HOW IT WORKS:
     /// 1. Intercepts all EVC batch calls (primary way vaults are called)
     /// 2. Extracts all vault addresses from the batch operations
-    /// 3. For each vault, compares exchange rate before/after the transaction
-    /// 4. If exchange rate decreased, checks if it's due to bad debt socialization
-    /// 5. Reverts if exchange rate decreased without legitimate bad debt socialization
+    /// 3. For each vault, compares share price before/after the transaction
+    /// 4. If share price decreased, checks if it's due to bad debt socialization
+    /// 5. Reverts if share price decreased without legitimate bad debt socialization
     ///
-    /// EXCHANGE RATE CALCULATION:
-    /// - Exchange rate = totalAssets * 1e18 / totalSupply
+    /// SHARE PRICE CALCULATION:
+    /// - Share price = totalAssets * 1e18 / totalSupply
     /// - Uses ERC4626 standard totalAssets() and totalSupply() functions
     /// - Handles edge cases like zero total supply gracefully
-    function assertionBatchExchangeRateInvariant() external {
+    function assertionBatchSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all batch calls to analyze
@@ -78,23 +78,23 @@ contract VaultExchangeRateMonitor is Assertion {
 
             // Process all vaults in this batch call
             for (uint256 j = 0; j < items.length; j++) {
-                validateVaultExchangeRateInvariant(items[j].targetContract);
+                validateVaultSharePriceInvariant(items[j].targetContract);
             }
         }
     }
 
     /// @notice Assertion for single call operations
-    /// @dev INVARIANT: Vault exchange rates cannot decrease unless there's legitimate bad debt socialization
+    /// @dev INVARIANT: Vault share prices cannot decrease unless there's legitimate bad debt socialization
     ///
     /// HOW IT WORKS:
     /// 1. Intercepts all EVC single calls (alternative way vaults are called)
     /// 2. Extracts vault address from each single call operation
-    /// 3. For each vault, compares exchange rate before/after the transaction
-    /// 4. If exchange rate decreased, checks if it's due to bad debt socialization
-    /// 5. Reverts if exchange rate decreased without legitimate bad debt socialization
+    /// 3. For each vault, compares share price before/after the transaction
+    /// 4. If share price decreased, checks if it's due to bad debt socialization
+    /// 5. Reverts if share price decreased without legitimate bad debt socialization
     ///
     /// NOTE: This covers the "call through EVC" pattern mentioned in the Euler whitepaper
-    function assertionCallExchangeRateInvariant() external {
+    function assertionCallSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all single calls to analyze
@@ -106,23 +106,23 @@ contract VaultExchangeRateMonitor is Assertion {
             // data)
             (address targetContract,,,) = abi.decode(singleCalls[i].input, (address, address, uint256, bytes));
 
-            // Validate exchange rate for the target contract (vault)
-            validateVaultExchangeRateInvariant(targetContract);
+            // Validate share price for the target contract (vault)
+            validateVaultSharePriceInvariant(targetContract);
         }
     }
 
     /// @notice Assertion for control collateral operations
-    /// @dev INVARIANT: Vault exchange rates cannot decrease unless there's legitimate bad debt socialization
+    /// @dev INVARIANT: Vault share prices cannot decrease unless there's legitimate bad debt socialization
     ///
     /// HOW IT WORKS:
     /// 1. Intercepts all EVC control collateral calls (collateral management operations)
     /// 2. Extracts vault address from each control collateral operation
-    /// 3. For each vault, compares exchange rate before/after the transaction
-    /// 4. If exchange rate decreased, checks if it's due to bad debt socialization
-    /// 5. Reverts if exchange rate decreased without legitimate bad debt socialization
+    /// 3. For each vault, compares share price before/after the transaction
+    /// 4. If share price decreased, checks if it's due to bad debt socialization
+    /// 5. Reverts if share price decreased without legitimate bad debt socialization
     ///
-    /// NOTE: This covers collateral control operations that might affect vault exchange rates
-    function assertionControlCollateralExchangeRateInvariant() external {
+    /// NOTE: This covers collateral control operations that might affect vault share prices
+    function assertionControlCollateralSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all control collateral calls to analyze
@@ -134,59 +134,59 @@ contract VaultExchangeRateMonitor is Assertion {
             // uint256 value, bytes data)
             (address targetCollateral,,,) = abi.decode(controlCalls[i].input, (address, address, uint256, bytes));
 
-            // Validate exchange rate for the target collateral (vault)
-            validateVaultExchangeRateInvariant(targetCollateral);
+            // Validate share price for the target collateral (vault)
+            validateVaultSharePriceInvariant(targetCollateral);
         }
     }
 
-    /// @notice Validates the exchange rate invariant for a specific vault
+    /// @notice Validates the share price invariant for a specific vault
     /// @param vault The vault address to validate
     ///
-    /// CORE INVARIANT: Exchange rate cannot decrease unless there's legitimate bad debt socialization
+    /// CORE INVARIANT: Share price cannot decrease unless there's legitimate bad debt socialization
     ///
     /// HOW IT WORKS:
     /// 1. Captures vault state before the transaction (pre-state)
     /// 2. Captures vault state after the transaction (post-state)
-    /// 3. Calculates exchange rates: totalAssets * 1e18 / totalSupply
-    /// 4. If exchange rate decreased, checks for bad debt socialization
+    /// 3. Calculates share prices: totalAssets * 1e18 / totalSupply
+    /// 4. If share price decreased, checks for bad debt socialization
     /// 5. Reverts if decrease occurred without legitimate bad debt socialization
     ///
     /// EDGE CASES HANDLED:
     /// - Non-contract addresses (skipped)
     /// - Vaults that don't implement ERC4626 (graceful failure)
-    /// - Zero total supply (exchange rate = 0)
-    function validateVaultExchangeRateInvariant(
+    /// - Zero total supply (share price = 0)
+    function validateVaultSharePriceInvariant(
         address vault
     ) internal {
         // Skip non-contract addresses
         if (vault.code.length == 0) return;
 
-        // Get pre-transaction exchange rate
+        // Get pre-transaction share price
         ph.forkPreTx();
-        uint256 preExchangeRate = getExchangeRate(vault);
+        uint256 preSharePrice = getSharePrice(vault);
 
-        // Get post-transaction exchange rate
+        // Get post-transaction share price
         ph.forkPostTx();
-        uint256 postExchangeRate = getExchangeRate(vault);
+        uint256 postSharePrice = getSharePrice(vault);
 
-        // Check if exchange rate decreased
-        if (postExchangeRate < preExchangeRate) {
-            // Exchange rate decreased - check if this is legitimate due to bad debt socialization
+        // Check if share price decreased
+        if (postSharePrice < preSharePrice) {
+            // Share price decreased - check if this is legitimate due to bad debt socialization
             bool hasLegitimateBadDebt = checkForBadDebtSocialization(vault);
 
             // Use simple error message to save gas
             require(
-                hasLegitimateBadDebt, "VaultExchangeRateMonitor: Exchange rate decreased without bad debt socialization"
+                hasLegitimateBadDebt, "VaultSharePriceAssertion: Share price decreased without bad debt socialization"
             );
         }
     }
 
-    /// @notice Gets the exchange rate of a vault
+    /// @notice Gets the share price of a vault
     /// @param vault The vault address
-    /// @return exchangeRate The exchange rate (totalAssets * 1e18 / totalSupply)
-    function getExchangeRate(
+    /// @return sharePrice The share price (totalAssets * 1e18 / totalSupply)
+    function getSharePrice(
         address vault
-    ) internal view returns (uint256 exchangeRate) {
+    ) internal view returns (uint256 sharePrice) {
         // Try to get totalAssets and totalSupply using staticcall for gas efficiency
         (bool success1, bytes memory data1) = vault.staticcall(abi.encodeWithSelector(0x01e1d114)); // totalAssets()
         if (!success1 || data1.length < 32) return 0;
@@ -196,9 +196,9 @@ contract VaultExchangeRateMonitor is Assertion {
         if (!success2 || data2.length < 32) return 0;
         uint256 totalSupply = abi.decode(data2, (uint256));
 
-        // Calculate exchange rate (totalAssets * 1e18 / totalSupply)
+        // Calculate share price (totalAssets * 1e18 / totalSupply)
         if (totalSupply > 0) {
-            exchangeRate = (totalAssets * 1e18) / totalSupply;
+            sharePrice = (totalAssets * 1e18) / totalSupply;
         }
     }
 

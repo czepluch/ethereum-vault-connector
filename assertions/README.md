@@ -43,6 +43,7 @@ FOUNDRY_PROFILE=assertions pcl test
 
 # Run specific test file
 pcl test assertions/test/VaultStatusCheck.t.sol
+pcl test assertions/test/VaultSharePriceAssertion.t.sol
 
 # Run with verbose output for debugging
 pcl test -vvv
