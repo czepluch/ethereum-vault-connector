@@ -207,9 +207,10 @@ contract VaultSharePriceAssertion is Assertion {
     /// @return hasBadDebt True if bad debt socialization was detected via events
     ///
     /// BAD DEBT SOCIALIZATION DETECTION VIA EVENTS:
-    /// According to the Euler whitepaper, bad debt socialization emits:
-    /// - Repay events where the repay appears to come from the liquidator
-    /// - Withdraw events where the withdraw appears to come from address(0)
+    /// According to the Euler whitepaper, bad debt socialization can be detected by:
+    /// 1. DebtSocialized event (primary indicator - if present, bad debt socialization occurred)
+    /// 2. Repay events where the repay appears to come from the liquidator
+    /// 3. Withdraw events where the withdraw appears to come from address(0)
     ///
     /// This function uses ph.getLogs() to monitor these events during the transaction.
     function checkForBadDebtSocialization(
@@ -218,6 +219,7 @@ contract VaultSharePriceAssertion is Assertion {
         // Get all logs from the transaction
         PhEvm.Log[] memory logs = ph.getLogs();
 
+        bool hasDebtSocializedEvent = false;
         bool hasRepayFromLiquidator = false;
         bool hasWithdrawFromZero = false;
 
@@ -227,6 +229,15 @@ contract VaultSharePriceAssertion is Assertion {
 
             // Check if this log is from our vault
             if (log.emitter == vault) {
+                // Check for DebtSocialized event (topic[0] = event signature)
+                // DebtSocialized event signature: keccak256("DebtSocialized(address,uint256)")
+                if (log.topics.length >= 1) {
+                    bytes32 debtSocializedEventSig = keccak256("DebtSocialized(address,uint256)");
+                    if (log.topics[0] == debtSocializedEventSig) {
+                        hasDebtSocializedEvent = true;
+                    }
+                }
+
                 // Check for Repay event (topic[0] = event signature, topic[1] = account)
                 // Repay event signature: keccak256("Repay(address,uint256)")
                 if (log.topics.length >= 2) {
@@ -256,7 +267,9 @@ contract VaultSharePriceAssertion is Assertion {
             }
         }
 
-        // Bad debt socialization is detected when both events occur together
-        return hasRepayFromLiquidator && hasWithdrawFromZero;
+        // Bad debt socialization is detected if:
+        // 1. DebtSocialized event is present (primary indicator), OR
+        // 2. Both Repay from liquidator AND Withdraw from address(0) occur together (legacy detection)
+        return hasDebtSocializedEvent || (hasRepayFromLiquidator && hasWithdrawFromZero);
     }
 }
