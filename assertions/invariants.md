@@ -2,6 +2,17 @@
 
 This document describes the invariants being protected by the assertions in this directory.
 
+## Overview
+
+| # | Assertion | Invariant |
+|---|-----------|-----------|
+| 1 | [VaultSharePriceAssertion](#1-vaultsharepriceassertion) | A vault's share price cannot decrease unless bad debt socialization occurs |
+| 2 | [AccountHealthAssertion](#2-accounthealthassertion) | A vault operation cannot make a healthy account unhealthy |
+| 3 | [VaultAccountingIntegrityAssertion](#3-vaultaccountingintegrityassertion) | The vault's actual balance must always be at least its cash, AND any change in balance must exactly match the change in internal accounting |
+| 4 | [VaultExchangeRateSpikeAssertion](#4-vaultexchangeratespikeassertion) | The exchange rate cannot suddenly change by more than 5% in a single transaction |
+
+---
+
 ## 1. VaultSharePriceAssertion
 
 **Contract File:** `VaultSharePriceAssertion.a.sol`
