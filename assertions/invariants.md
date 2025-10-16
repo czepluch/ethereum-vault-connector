@@ -10,6 +10,7 @@ This document describes the invariants being protected by the assertions in this
 | 2 | [AccountHealthAssertion](#2-accounthealthassertion) | A vault operation cannot make a healthy account unhealthy |
 | 3 | [VaultAccountingIntegrityAssertion](#3-vaultaccountingintegrityassertion) | The vault's actual balance must always be at least its cash, AND any change in balance must exactly match the change in internal accounting |
 | 4 | [VaultExchangeRateSpikeAssertion](#4-vaultexchangeratespikeassertion) | The exchange rate cannot suddenly change by more than 5% in a single transaction |
+| 5 | [VaultAssetTransferAccountingAssertion](#5-vaultassettransferaccountingassertion) | Any asset transferred from a vault must be accompanied by a corresponding Withdraw or Borrow event |
 
 ---
 
@@ -246,12 +247,14 @@ Then the following invariants must hold:
 The assertion performs two complementary checks:
 
 **Check 1: Absolute Integrity (Post-transaction only)**
+
 - Query vault's asset token via `vault.asset()`
 - Get actual balance via `asset.balanceOf(vault)`
 - Get internal cash accounting via `vault.cash()`
 - Assert: `balance >= cash`
 
 **Check 2: Change Integrity (Pre/Post comparison)**
+
 - Fork to pre-transaction state and capture:
   - `asset.balanceOf(vault)` → balancePre
   - `vault.cash()` → cashPre
@@ -350,6 +353,7 @@ changePct <= THRESHOLD (5%)
 **Vault Detection:** Use `getCallInputs()` to find vault operations through EVC
 
 **Pre and Post-transaction checks:**
+
 - Fork to pre-transaction state:
   - Calculate exchange rate: `ratePre = vault.totalAssets() * 1e18 / vault.totalSupply()`
 - Fork to post-transaction state:
@@ -384,3 +388,118 @@ The assertion intercepts and validates all EVC operations that can affect exchan
 - **Note:** Smaller vaults (< $1M TVL) might need higher thresholds due to rounding impact
 - **Note:** Some vault types might legitimately have higher volatility and need custom thresholds
 - **Note:** Consider per-vault configurable thresholds in future versions
+
+## 5. VaultAssetTransferAccountingAssertion
+
+**Contract File:** `VaultAssetTransferAccountingAssertion.a.sol`
+
+### Invariant: VAULT_ASSET_TRANSFER_ACCOUNTING_INVARIANT
+
+**Description:** Any asset tokens leaving the vault must be accompanied by a corresponding Withdraw or Borrow event with matching amount.
+
+**Mathematical Definition:**
+
+```
+For any vault V, any transaction T, and the asset token A = V.asset():
+
+Let:
+- transferEvents = all Transfer(address from, address to, uint256 amount) events
+                   emitted by A where from == V in transaction T
+- withdrawEvents = all Withdraw(address sender, address receiver, address owner,
+                                uint256 assets, uint256 shares) events
+                   emitted by V in transaction T
+- borrowEvents = all Borrow(address account, uint256 assets) events
+                 emitted by V in transaction T
+- totalTransferred = sum of all amounts in transferEvents
+- totalWithdrawn = sum of all assets in withdrawEvents
+- totalBorrowed = sum of all assets in borrowEvents
+- totalAccounted = totalWithdrawn + totalBorrowed
+
+Then the following invariant must hold:
+totalTransferred <= totalAccounted
+```
+
+**In Plain English:**
+"Every asset token that leaves the vault must be accounted for by a Withdraw or Borrow event"
+
+### What This Protects Against
+
+- **Unauthorized asset extraction** without proper event emission
+- **Exploits** that bypass normal withdrawal/borrow flows
+- **Implementation bugs** where assets are transferred without events
+- **Malicious vault code** that silently drains funds
+- **Accounting bypasses** that don't update internal state properly
+
+### What This Allows
+
+- **Normal withdrawals** with Withdraw events
+- **Normal borrows** with Borrow events
+- **Multiple operations** in same transaction (sum of all transfers matched against sum of all events)
+- **Flash loans** (assets transferred out and returned in same tx, net should match events)
+
+### Implementation Approach
+
+**Event Parsing:**
+
+The assertion monitors three types of events:
+
+1. **Transfer events from asset contract:**
+   - Event: `Transfer(address indexed from, address indexed to, uint256 amount)`
+   - Filter: `from == vault address`
+   - Capture: `amount` for each transfer
+
+2. **Withdraw events from vault:**
+   - Event: `Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)`
+   - Capture: `assets` amount for each withdrawal
+
+3. **Borrow events from vault:**
+   - Event: `Borrow(address indexed account, uint256 assets)`
+   - Capture: `assets` amount for each borrow
+
+**Validation Logic:**
+
+- Sum all Transfer amounts where `from == vault`
+- Sum all Withdraw `assets` amounts
+- Sum all Borrow `assets` amounts
+- Assert: `totalTransferred <= totalWithdrawn + totalBorrowed`
+
+**Vault Detection:** Use `getCallInputs()` to find vault operations through EVC, then parse events from those vaults and their asset tokens
+
+### Monitored Operations
+
+The assertion intercepts and validates all EVC operations that can result in asset transfers:
+
+- `EVC.batch()` - Batch operations (primary vault interaction method)
+- `EVC.call()` - Single call operations
+- `EVC.controlCollateral()` - Collateral control operations
+
+### Edge Cases Handled
+
+- **Multiple transfers in one transaction** - Sum all transfers and all accounting events
+- **Flash loans** - Assets transferred out and back; net effect should still be accounted for by events
+- **Transfers to vault (deposits/repays)** - Only check transfers OUT (where `from == vault`)
+- **Fee transfers** - Should be accompanied by fee-related events or included in withdrawal amounts
+- **Non-EVault contracts** - Skipped gracefully (no Withdraw/Borrow events)
+- **Failed event parsing** - Skipped gracefully
+- **Zero amount transfers** - Handled correctly in summation
+
+### Relationship to VaultAccountingIntegrityAssertion
+
+This assertion is **complementary but distinct** from VaultAccountingIntegrityAssertion:
+
+- **VaultAccountingIntegrityAssertion**: Checks balance changes match accounting changes (cash + borrows)
+- **VaultAssetTransferAccountingAssertion**: Checks Transfer events match Withdraw/Borrow events
+
+**Why both are needed:**
+
+- VaultAccountingIntegrityAssertion catches silent balance manipulation
+- VaultAssetTransferAccountingAssertion catches missing events even if balance/accounting sync
+- Together they provide defense-in-depth: both event emission AND balance/accounting must be correct
+
+### Future Enhancements
+
+- **Note:** Could also check transfers IN to vault match Deposit/Repay events (symmetric check)
+- **Note:** May need to handle special cases for fee collection if fees are transferred separately
+- **Note:** Could track flash loan events explicitly and verify round-trip transfers
+- **Note:** Consider allowing small tolerance for rounding differences if multiple small operations aggregate
+- **Note:** Could extend to verify event parameters beyond just amounts (e.g., verify receivers match expected addresses)
