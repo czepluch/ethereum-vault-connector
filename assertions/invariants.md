@@ -8,7 +8,7 @@ This document describes the invariants being protected by the assertions in this
 |---|-----------|-----------|
 | 1 | [VaultSharePriceAssertion](#1-vaultsharepriceassertion) | A vault's share price cannot decrease unless bad debt socialization occurs |
 | 2 | [AccountHealthAssertion](#2-accounthealthassertion) | A vault operation cannot make a healthy account unhealthy |
-| 3 | [VaultAccountingIntegrityAssertion](#3-vaultaccountingintegrityassertion) | The vault's actual balance must always be at least its cash, AND any change in balance must exactly match the change in internal accounting |
+| 3 | [VaultAccountingIntegrityAssertion](#3-vaultaccountingintegrityassertion) | The vault's actual balance must always be at least its cash |
 | 4 | [VaultExchangeRateSpikeAssertion](#4-vaultexchangeratespikeassertion) | The exchange rate cannot suddenly change by more than 5% in a single transaction |
 | 5 | [VaultAssetTransferAccountingAssertion](#5-vaultassettransferaccountingassertion) | Any asset transferred from a vault must be accompanied by a corresponding Withdraw or Borrow event |
 
@@ -194,7 +194,7 @@ The assertion intercepts and validates all EVC operations that can affect accoun
 
 ### Invariant: VAULT_ACCOUNTING_INTEGRITY_INVARIANT
 
-**Description:** A vault's actual asset balance must always match its internal accounting, both in absolute terms and for changes during transactions.
+**Description:** A vault's actual asset balance must always be at least its internal cash accounting.
 
 **Mathematical Definition:**
 
@@ -203,84 +203,42 @@ For any vault V and any transaction T that interacts with V:
 
 Let:
 - asset = V.asset()
-- balance_post = asset.balanceOf(V) after transaction T
-- cash_post = V.cash() after transaction T
-- balance_pre = asset.balanceOf(V) before transaction T
-- cash_pre = V.cash() before transaction T
-- borrows_pre = V.totalBorrows() before transaction T
-- borrows_post = V.totalBorrows() after transaction T
+- balance = asset.balanceOf(V) after transaction T
+- cash = V.cash() after transaction T
 
-Then the following invariants must hold:
-
-1. Absolute Integrity Check:
-   balance_post >= cash_post
-
-2. Change Integrity Check:
-   (balance_post - balance_pre) == (cash_post + borrows_post) - (cash_pre + borrows_pre)
+Then the following invariant must hold:
+   balance >= cash
 ```
 
 **In Plain English:**
-"The vault's actual balance must always be at least its cash, AND any change in balance must exactly match the change in internal accounting (cash + borrows)"
+"The vault's actual token balance must always be at least what it claims to have as cash"
 
 ### What This Protects Against
 
-- **Accounting bugs** where internal tracking diverges from reality
-- **Asset theft** or unauthorized withdrawals not properly tracked
-- **Flash loan attacks** that manipulate internal accounting
-- **Implementation errors** in deposit/withdrawal/borrow/repay logic
+- **Asset theft** where tokens leave the vault without cash being decremented
+- **Accounting bugs** where cash is inflated without corresponding tokens
+- **Implementation errors** in withdrawal logic that fail to update cash
 - **Unauthorized asset extraction** without proper accounting updates
-- **Exploits** that manipulate internal state without moving assets
-- **Compensating errors** where multiple bugs cancel out in absolute terms but show up in deltas
+- **Exploits** that transfer assets out while leaving cash unchanged
 
 ### What This Allows
 
-- **Normal vault operations** where balance and accounting move together correctly
-- **Donations to vault** (balance > cash is acceptable in absolute check)
-- **Deposits** (balance↑, cash↑, accounting change matches)
-- **Withdrawals** (balance↓, cash↓, accounting change matches)
-- **Borrows** (balance↓, borrows↑, net accounting unchanged)
-- **Repays** (balance↑, borrows↓, net accounting unchanged)
-- **Unaccounted assets** that can be claimed via skim()
+- **Normal deposits** (balance and cash both increase)
+- **Normal withdrawals** (balance and cash both decrease, balance remains >= cash)
+- **Borrows** (balance and cash both decrease by same amount, balance remains >= cash)
+- **Repays** (balance and cash both increase by same amount)
+- **Donations to vault** (balance > cash is acceptable - unaccounted assets can be claimed via skim())
 
 ### Implementation Approach
 
-The assertion performs two complementary checks:
-
-**Check 1: Absolute Integrity (Post-transaction only)**
+The assertion performs a simple check after each transaction:
 
 - Query vault's asset token via `vault.asset()`
 - Get actual balance via `asset.balanceOf(vault)`
 - Get internal cash accounting via `vault.cash()`
 - Assert: `balance >= cash`
 
-**Check 2: Change Integrity (Pre/Post comparison)**
-
-- Fork to pre-transaction state and capture:
-  - `asset.balanceOf(vault)` → balancePre
-  - `vault.cash()` → cashPre
-  - `vault.totalBorrows()` → borrowsPre
-- Fork to post-transaction state and capture same values
-- Calculate changes: `ΔBalance = balancePost - balancePre`
-- Calculate accounting change: `ΔAccounting = (cashPost + borrowsPost) - (cashPre + borrowsPre)`
-- Assert: `ΔBalance == ΔAccounting`
-
 **Vault Detection:** Use `getCallInputs()` to find all vault operations through EVC (batch/call/controlCollateral)
-
-### Two-Level Protection
-
-This assertion provides defense in depth:
-
-1. **First Guard (Absolute Check):**
-   - Fast, simple comparison: `balance >= cash`
-   - Catches vaults already in bad state from previous issues
-   - Low computational cost
-   - Immediate detection of critical accounting failures
-
-2. **Second Guard (Change Check):**
-   - Precise tracking: `ΔBalance == Δ(Cash + Borrows)`
-   - Identifies exact transaction that caused divergence
-   - Catches subtle bugs that might pass absolute check
-   - Detects compensating errors
 
 ### Monitored Operations
 
@@ -292,19 +250,30 @@ The assertion intercepts and validates all EVC operations that can affect vault 
 
 ### Edge Cases Handled
 
-- **Non-EVault contracts** (no asset(), cash(), or totalBorrows() functions) - Skipped gracefully
+- **Non-EVault contracts** (no asset() or cash() functions) - Skipped gracefully
 - **Failed staticcalls** - Skipped gracefully
-- **Balance > cash** - Allowed in absolute check (unaccounted assets can be skimmed)
-- **Negative changes** (withdrawals/borrows) - Handled with signed integers in change check
-- **Multiple operations in batch** - Net change checked across entire transaction
-- **Vaults starting in bad state** - Caught immediately by absolute check
+- **Balance > cash** - Allowed (unaccounted assets can be skimmed)
+- **Multiple operations in batch** - Single check performed after all operations complete
+- **Vaults starting in bad state** - Caught immediately by check
+
+### Relationship to VaultAssetTransferAccountingAssertion
+
+This assertion is **complementary but distinct** from VaultAssetTransferAccountingAssertion:
+
+- **VaultAccountingIntegrityAssertion**: Checks actual balance >= internal cash accounting (state-based)
+- **VaultAssetTransferAccountingAssertion**: Checks Transfer events match Withdraw/Borrow events (event-based)
+
+**Why both are needed:**
+
+- VaultAccountingIntegrityAssertion catches balance/cash divergence
+- VaultAssetTransferAccountingAssertion catches missing events even if balance/cash don't diverge
+- Together they provide defense-in-depth: both state AND events must be correct
 
 ### Future Enhancements
 
-- **Note:** Could track individual operations (deposits, withdrawals, borrows, repays) and verify each one updates accounting correctly, providing even more granular detection
+- **Note:** Could add change tracking: `Δbalance == Δcash` for more precise detection of exact transaction causing divergence
 - **Note:** Could allow small tolerance (1-2 wei) for rounding differences if needed in practice
-- **Note:** Consider checking fees separately if they affect balance without affecting cash+borrows in some vault implementations
-- **Note:** Could extend to track interest accrual explicitly if that affects totalBorrows without immediate balance changes
+- **Note:** Consider checking fees separately if they affect balance without affecting cash in some vault implementations
 
 ## 4. VaultExchangeRateSpikeAssertion
 
