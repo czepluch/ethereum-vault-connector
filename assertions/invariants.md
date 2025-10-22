@@ -16,7 +16,7 @@ This document describes the invariants being protected by the assertions in this
 
 ## 1. VaultSharePriceAssertion
 
-**Contract File:** `VaultSharePriceAssertion.a.sol`
+**Contract File:** [VaultSharePriceAssertion.a.sol](src/VaultSharePriceAssertion.a.sol)
 
 ### Invariant: VAULT_SHARE_PRICE_INVARIANT
 
@@ -58,7 +58,7 @@ SP_post(V) >= SP_pre(V) ∨ BDS(T,V)
 
 ## 2. AccountHealthAssertion
 
-**Contract File:** `AccountHealthAssertion.a.sol`
+**Contract File:** [AccountHealthAssertion.a.sol](src/AccountHealthAssertion.a.sol)
 
 ### Invariant: ACCOUNT_HEALTH_INVARIANT
 
@@ -143,7 +143,7 @@ Assertion: Checks health at BOTH VaultA and VaultB, catches the violation
 
 ## 3. VaultAccountingIntegrityAssertion
 
-**Contract File:** `VaultAccountingIntegrityAssertion.a.sol`
+**Contract File:** [VaultAccountingIntegrityAssertion.a.sol](src/VaultAccountingIntegrityAssertion.a.sol)
 
 ### Invariant: VAULT_ACCOUNTING_INTEGRITY_INVARIANT
 
@@ -193,7 +193,7 @@ These two assertions provide complementary checks: VaultAccountingIntegrityAsser
 
 ## 4. VaultExchangeRateSpikeAssertion
 
-**Contract File:** `VaultExchangeRateSpikeAssertion.a.sol`
+**Contract File:** [VaultExchangeRateSpikeAssertion.a.sol](src/VaultExchangeRateSpikeAssertion.a.sol)
 
 ### Invariant: VAULT_EXCHANGE_RATE_SPIKE_INVARIANT
 
@@ -242,7 +242,7 @@ changePct <= THRESHOLD (5%)
 
 ## 5. VaultAssetTransferAccountingAssertion
 
-**Contract File:** `VaultAssetTransferAccountingAssertion.a.sol`
+**Contract File:** [VaultAssetTransferAccountingAssertion.a.sol](src/VaultAssetTransferAccountingAssertion.a.sol)
 
 ### Invariant: VAULT_ASSET_TRANSFER_ACCOUNTING_INVARIANT
 
