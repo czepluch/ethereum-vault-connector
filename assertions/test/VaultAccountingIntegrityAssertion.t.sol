@@ -7,17 +7,20 @@ import {VaultAccountingIntegrityAssertion} from "../src/VaultAccountingIntegrity
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
 import {IERC4626} from "openzeppelin-contracts/interfaces/IERC4626.sol";
-import {ERC20} from "openzeppelin-contracts/token/ERC20/ERC20.sol";
-import {ERC4626} from "openzeppelin-contracts/token/ERC20/extensions/ERC4626.sol";
+
+// Import shared mocks
+import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockEVault} from "./mocks/MockEVault.sol";
+import {CashThiefVault} from "./mocks/MaliciousVaults.sol";
 
 /// @title TestVaultAccountingIntegrityAssertion
 /// @notice Test suite for VaultAccountingIntegrityAssertion
 /// @dev Tests the invariant: balance >= cash
 contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
     IEVC public evc;
-    RealEVault public vault1;
-    RealEVault public vault2;
-    MaliciousVault public maliciousVault;
+    MockEVault public vault1;
+    MockEVault public vault2;
+    CashThiefVault public maliciousVault;
     MockERC20 public asset;
 
     address public user1 = address(0xbEEF);
@@ -31,11 +34,11 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
         asset = new MockERC20("Mock Asset", "MOCK");
 
         // Deploy real vaults
-        vault1 = new RealEVault(asset, evc);
-        vault2 = new RealEVault(asset, evc);
+        vault1 = new MockEVault(asset, evc);
+        vault2 = new MockEVault(asset, evc);
 
         // Deploy malicious vault
-        maliciousVault = new MaliciousVault(asset, evc);
+        maliciousVault = new CashThiefVault(asset, evc);
 
         // Mint assets to users
         asset.mint(user1, 1000e18);
@@ -123,7 +126,7 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(RealEVault.borrow.selector, 30e18, user1);
+        items[0].data = abi.encodeWithSelector(MockEVault.borrow.selector, 30e18, user1);
 
         // Register assertion
         cl.assertion({
@@ -146,14 +149,14 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
         vm.prank(user1);
         evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 100e18, user1));
         vm.prank(user1);
-        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(RealEVault.borrow.selector, 30e18, user1));
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockEVault.borrow.selector, 30e18, user1));
 
         // Create batch with repay
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(RealEVault.repay.selector, 20e18, user1);
+        items[0].data = abi.encodeWithSelector(MockEVault.repay.selector, 20e18, user1);
 
         // Register assertion
         cl.assertion({
@@ -186,7 +189,7 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
         items[1].targetContract = address(vault1);
         items[1].onBehalfOfAccount = user1;
         items[1].value = 0;
-        items[1].data = abi.encodeWithSelector(RealEVault.borrow.selector, 30e18, user1);
+        items[1].data = abi.encodeWithSelector(MockEVault.borrow.selector, 30e18, user1);
 
         items[2].targetContract = address(vault1);
         items[2].onBehalfOfAccount = user1;
@@ -281,7 +284,7 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
         // Execute controlCollateral - just transfers shares, no asset movement
         vm.prank(address(vault1));
         evc.controlCollateral(
-            address(vault2), user1, 0, abi.encodeWithSelector(RealEVault.seizeCollateral.selector, user1, user2, 50e18)
+            address(vault2), user1, 0, abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18)
         );
 
         // Assertion passes: no asset movement, balance and cash unchanged ✓
@@ -437,146 +440,5 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
 
         vm.prank(user1);
         evc.batch(items);
-    }
-}
-
-// ========================================
-// MOCK CONTRACTS
-// ========================================
-
-/// @notice Simple ERC20 mock for testing
-contract MockERC20 is ERC20 {
-    constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-}
-
-/// @notice Real EVault implementation for testing
-/// @dev Implements ERC4626 + cash() for testing
-contract RealEVault is ERC4626 {
-    IEVC public immutable evc;
-
-    // Internal accounting: cash tracks actual assets in vault
-    uint256 public cash;
-
-    // Borrow tracking (not used for assertion, but needed for realistic vault behavior)
-    mapping(address => uint256) public borrows;
-    uint256 public totalBorrows;
-
-    constructor(MockERC20 _asset, IEVC _evc) ERC4626(_asset) ERC20("Real EVault", "rEV") {
-        evc = _evc;
-    }
-
-    /// @notice Get the actual account from EVC context
-    function _getActualCaller() internal view returns (address) {
-        if (msg.sender == address(evc)) {
-            (address account,) = evc.getCurrentOnBehalfOfAccount(address(0));
-            return account != address(0) ? account : msg.sender;
-        }
-        return msg.sender;
-    }
-
-    /// @notice Deposit with cash tracking
-    function deposit(uint256 assets, address receiver) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-        uint256 shares = previewDeposit(assets);
-        _deposit(caller, receiver, assets, shares);
-        cash += assets; // Update cash
-        return shares;
-    }
-
-    /// @notice Withdraw with cash tracking
-    function withdraw(uint256 assets, address receiver, address owner) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-        uint256 shares = previewWithdraw(assets);
-        _withdraw(caller, receiver, owner, assets, shares);
-        cash -= assets; // Update cash
-        return shares;
-    }
-
-    /// @notice Borrow assets (decreases both balance and cash)
-    function borrow(uint256 assets, address receiver) external returns (uint256) {
-        MockERC20(asset()).transfer(receiver, assets);
-        cash -= assets; // Update cash
-        borrows[receiver] += assets;
-        totalBorrows += assets;
-        return assets;
-    }
-
-    /// @notice Repay borrowed assets (increases both balance and cash)
-    function repay(uint256 assets, address debtor) external returns (uint256) {
-        address caller = _getActualCaller();
-        MockERC20(asset()).transferFrom(caller, address(this), assets);
-        cash += assets; // Update cash
-        borrows[debtor] -= assets;
-        totalBorrows -= assets;
-        return assets;
-    }
-
-    /// @notice Check account status - required for EVC
-    function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
-        return this.checkAccountStatus.selector;
-    }
-
-    /// @notice Check vault status - required for EVC
-    function checkVaultStatus() external pure returns (bytes4) {
-        return this.checkVaultStatus.selector;
-    }
-
-    /// @notice Seize collateral during liquidation (just transfers shares, no assets)
-    function seizeCollateral(address from, address to, uint256 shares) external returns (bool) {
-        uint256 assets = convertToAssets(shares);
-        _transfer(from, to, shares);
-        emit Withdraw(address(this), to, from, assets, shares);
-        return true;
-    }
-}
-
-/// @notice Malicious vault for testing failure scenarios
-contract MaliciousVault is RealEVault {
-    // Behavior flags
-    bool public stealOnWithdraw; // Transfers extra assets without updating cash
-    bool public skipCashUpdate; // Skips cash updates on withdraw
-
-    constructor(MockERC20 _asset, IEVC _evc) RealEVault(_asset, _evc) {}
-
-    function setStealOnWithdraw(
-        bool _enabled
-    ) external {
-        stealOnWithdraw = _enabled;
-    }
-
-    function setSkipCashUpdate(
-        bool _enabled
-    ) external {
-        skipCashUpdate = _enabled;
-    }
-
-    /// @notice Corrupt cash value manually (for testing bad state)
-    function corruptCash(
-        uint256 newCash
-    ) external {
-        cash = newCash;
-    }
-
-    /// @notice Malicious withdraw - can steal or skip cash update
-    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256) {
-        address caller = _getActualCaller();
-        uint256 shares = previewWithdraw(assets);
-        _withdraw(caller, receiver, owner, assets, shares);
-
-        // Update cash (unless skipCashUpdate flag is set)
-        if (!skipCashUpdate) {
-            cash -= assets;
-        }
-
-        // Steal extra assets if flag set
-        if (stealOnWithdraw) {
-            MockERC20(asset()).transfer(receiver, 10e18);
-        }
-
-        return shares;
     }
 }

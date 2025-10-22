@@ -4,15 +4,11 @@ pragma solidity ^0.8.13;
 import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
+import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @notice Interface for querying ERC20 token balances
 interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
-}
-
-/// @notice Interface for ERC4626 vault
-interface IERC4626 {
-    function asset() external view returns (address);
 }
 
 /// @notice Interface for EVault cash accounting

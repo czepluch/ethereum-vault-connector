@@ -7,17 +7,20 @@ import {VaultExchangeRateSpikeAssertion} from "../src/VaultExchangeRateSpikeAsse
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
 import {IERC4626} from "openzeppelin-contracts/interfaces/IERC4626.sol";
-import {ERC20} from "openzeppelin-contracts/token/ERC20/ERC20.sol";
-import {ERC4626} from "openzeppelin-contracts/token/ERC20/extensions/ERC4626.sol";
+
+// Import shared mocks
+import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockEVault} from "./mocks/MockEVault.sol";
+import {RateManipulatorVault} from "./mocks/MaliciousVaults.sol";
 
 /// @title TestVaultExchangeRateSpikeAssertion
 /// @notice Test suite for VaultExchangeRateSpikeAssertion
 /// @dev Tests the invariant: |rate_change| <= 5%
 contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
     IEVC public evc;
-    RealVault public vault1;
-    RealVault public vault2;
-    MaliciousVault public maliciousVault;
+    MockEVault public vault1;
+    MockEVault public vault2;
+    RateManipulatorVault public maliciousVault;
     MockERC20 public asset;
 
     address public user1 = address(0xbEEF);
@@ -31,11 +34,11 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
         asset = new MockERC20("Mock Asset", "MOCK");
 
         // Deploy real vaults
-        vault1 = new RealVault(asset, evc);
-        vault2 = new RealVault(asset, evc);
+        vault1 = new MockEVault(asset, evc);
+        vault2 = new MockEVault(asset, evc);
 
         // Deploy malicious vault
-        maliciousVault = new MaliciousVault(asset, evc);
+        maliciousVault = new RateManipulatorVault(asset, evc);
 
         // Mint assets to users
         asset.mint(user1, 10000e18);
@@ -283,7 +286,7 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
             address(vault2),
             user1,
             0,
-            abi.encodeWithSelector(RealVault.seizeCollateral.selector, user1, user2, 50e18)
+            abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18)
         );
 
         // Assertion passes: no rate change
@@ -311,7 +314,7 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(RealVault.skim.selector, 500e18, user1);
+        items[0].data = abi.encodeWithSelector(MockEVault.skim.selector, 500e18, user1);
 
         // Execute batch call
         vm.prank(user1);
@@ -439,142 +442,5 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
 
         vm.prank(user1);
         evc.batch(items);
-    }
-}
-
-// ========================================
-// MOCK CONTRACTS
-// ========================================
-
-/// @notice Simple ERC20 mock for testing
-contract MockERC20 is ERC20 {
-    constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-}
-
-/// @notice Real vault implementation for testing
-contract RealVault is ERC4626 {
-    IEVC public immutable evc;
-
-    constructor(MockERC20 _asset, IEVC _evc) ERC4626(_asset) ERC20("Real Vault", "rVAULT") {
-        evc = _evc;
-    }
-
-    /// @notice Get the actual account from EVC context or msg.sender
-    function _getActualCaller() internal view returns (address) {
-        if (address(evc) != address(0) && msg.sender == address(evc)) {
-            (address account,) = evc.getCurrentOnBehalfOfAccount(address(0));
-            return account != address(0) ? account : msg.sender;
-        }
-        return msg.sender;
-    }
-
-    /// @notice Override deposit to use actual caller
-    function deposit(uint256 assets, address receiver) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-        uint256 shares = previewDeposit(assets);
-        _deposit(caller, receiver, assets, shares);
-        return shares;
-    }
-
-    /// @notice Override withdraw to use actual caller
-    function withdraw(uint256 assets, address receiver, address owner) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-        uint256 shares = previewWithdraw(assets);
-        _withdraw(caller, receiver, owner, assets, shares);
-        return shares;
-    }
-
-    /// @notice Check account status - required for EVC
-    function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
-        return this.checkAccountStatus.selector;
-    }
-
-    /// @notice Check vault status - required for EVC
-    function checkVaultStatus() external pure returns (bytes4) {
-        return this.checkVaultStatus.selector;
-    }
-
-    /// @notice Seize collateral during liquidation (just transfers shares)
-    function seizeCollateral(address from, address to, uint256 shares) external returns (bool) {
-        uint256 assets = convertToAssets(shares);
-        _transfer(from, to, shares);
-        emit Withdraw(address(this), to, from, assets, shares);
-        return true;
-    }
-
-    /// @notice skim() function to claim unaccounted assets
-    function skim(uint256 amount, address receiver) external returns (uint256) {
-        // Calculate excess assets (balance - totalAssets)
-        uint256 balance = MockERC20(asset()).balanceOf(address(this));
-        uint256 excess = balance - totalAssets();
-
-        // Skim requested amount (up to excess)
-        uint256 skimAmount = amount > excess ? excess : amount;
-
-        // Mint shares for skimmed assets
-        uint256 shares = previewDeposit(skimAmount);
-        _mint(receiver, shares);
-
-        emit Deposit(msg.sender, receiver, skimAmount, shares);
-
-        return shares;
-    }
-}
-
-/// @notice Malicious vault for testing failure scenarios
-contract MaliciousVault is RealVault {
-    uint256 public inflationBps; // Inflation to apply on next operation (in basis points)
-    uint256 public deflationBps; // Deflation to apply on next operation (in basis points)
-
-    constructor(MockERC20 _asset, IEVC _evc) RealVault(_asset, _evc) {}
-
-    /// @notice Inflate totalAssets by percentage
-    function inflateTotalAssets(uint256 percentage) external {
-        uint256 current = totalAssets();
-        uint256 inflation = (current * percentage) / 100;
-        MockERC20(asset()).mint(address(this), inflation);
-    }
-
-    /// @notice Deflate totalAssets by percentage
-    function deflateTotalAssets(uint256 percentage) external {
-        uint256 current = totalAssets();
-        uint256 deflation = (current * percentage) / 100;
-        // Burn tokens to simulate loss (use transfer, not transferFrom)
-        MockERC20(asset()).transfer(address(0xdead), deflation);
-    }
-
-    /// @notice Set inflation to apply on next deposit
-    function setInflationBps(uint256 bps) external {
-        inflationBps = bps;
-    }
-
-    /// @notice Set deflation to apply on next deposit
-    function setDeflationBps(uint256 bps) external {
-        deflationBps = bps;
-    }
-
-    /// @notice Override deposit to apply inflation or deflation
-    function deposit(uint256 assets, address receiver) public override returns (uint256) {
-        // Apply inflation if set
-        if (inflationBps > 0) {
-            uint256 current = totalAssets();
-            uint256 inflation = (current * inflationBps) / 10000;
-            MockERC20(asset()).mint(address(this), inflation);
-            inflationBps = 0; // Reset after use
-        }
-
-        // Apply deflation if set
-        if (deflationBps > 0) {
-            uint256 current = totalAssets();
-            uint256 deflation = (current * deflationBps) / 10000;
-            MockERC20(asset()).transfer(address(0xdead), deflation);
-            deflationBps = 0; // Reset after use
-        }
-
-        return super.deposit(assets, receiver);
     }
 }

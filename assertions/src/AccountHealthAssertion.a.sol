@@ -48,7 +48,12 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 /// - Healthy accounts can become healthier
 /// - Normal vault operations that maintain or improve account health
 ///
-/// TODO: Research if operations on one vault can affect account health in other untouched vaults
+/// CROSS-VAULT HEALTH IMPACT:
+/// Operations on one vault CAN affect account health in controller vaults. When a collateral vault
+/// is modified (e.g., withdraw reduces collateral), the controller vault's view of account health
+/// changes because checkAccountStatus() receives all enabled collaterals and prices them together.
+/// This assertion checks health at BOTH the touched vaults AND the controller vaults for all affected accounts.
+///
 /// TODO: Follow up on whether we should skip accounts with no position (zero collateral and liability)
 contract AccountHealthAssertion is Assertion {
     /// @notice Register triggers for EVC operations
@@ -67,11 +72,19 @@ contract AccountHealthAssertion is Assertion {
     /// HOW IT WORKS:
     /// 1. Intercepts all EVC batch calls (primary way vaults are called)
     /// 2. Extracts onBehalfOfAccount from each batch operation
-    /// 3. For each account, checks health status before/after the transaction
+    /// 3. For each account, checks health status before/after the transaction at:
+    ///    a) The vault that was directly touched in the batch
+    ///    b) All controller vaults for that account (to catch cross-vault health impacts)
     /// 4. Reverts if a healthy account becomes unhealthy
     ///
+    /// CROSS-VAULT HEALTH CHECKS:
+    /// When a collateral vault is modified (e.g., withdraw), the controller vault's view of
+    /// account health changes. The controller evaluates all enabled collaterals together via
+    /// checkAccountStatus(). Therefore, we must check health at controllers even if they
+    /// weren't directly called in the batch.
+    ///
     /// ACCOUNT IDENTIFICATION:
-    /// - Only checks onBehalfOfAccount (the authenticated account for the operation)
+    /// - Checks onBehalfOfAccount (the authenticated account for the operation)
     /// - This covers the vast majority of cases where health changes through user's own actions
     /// - Does not check secondary affected accounts (e.g., transfer recipients, deposit receivers)
     /// - Future: Can add specific function signature checks if needed for comprehensive coverage
@@ -96,9 +109,25 @@ contract AccountHealthAssertion is Assertion {
                 // Skip non-contract addresses
                 if (items[j].targetContract.code.length == 0) continue;
 
-                // Validate the onBehalfOfAccount (authenticated account for this operation)
-                if (items[j].onBehalfOfAccount != address(0)) {
-                    validateAccountHealthInvariant(items[j].targetContract, items[j].onBehalfOfAccount);
+                address account = items[j].onBehalfOfAccount;
+                if (account == address(0)) continue;
+
+                // Check 1: Validate health at the touched vault
+                validateAccountHealthInvariant(items[j].targetContract, account);
+
+                // Check 2: Validate health at controller vaults for this account
+                // This catches cross-vault health impacts (e.g., withdrawing collateral from vault A
+                // affects health as seen by controller vault B)
+                address[] memory controllers = evc.getControllers(account);
+
+                for (uint256 k = 0; k < controllers.length; k++) {
+                    address controller = controllers[k];
+                    if (controller.code.length == 0) continue;
+
+                    // Validate health at controller vault
+                    // Note: This may redundantly check the same controller multiple times if the same
+                    // account appears in multiple batch items
+                    validateAccountHealthInvariant(controller, account);
                 }
             }
         }
@@ -129,10 +158,19 @@ contract AccountHealthAssertion is Assertion {
 
             // Skip non-contract addresses
             if (targetContract.code.length == 0) continue;
+            if (onBehalfOfAccount == address(0)) continue;
 
-            // Validate the onBehalfOfAccount (authenticated account for this operation)
-            if (onBehalfOfAccount != address(0)) {
-                validateAccountHealthInvariant(targetContract, onBehalfOfAccount);
+            // Check 1: Validate health at the touched vault
+            validateAccountHealthInvariant(targetContract, onBehalfOfAccount);
+
+            // Check 2: Validate health at controller vaults
+            address[] memory controllers = evc.getControllers(onBehalfOfAccount);
+
+            for (uint256 k = 0; k < controllers.length; k++) {
+                address controller = controllers[k];
+                if (controller.code.length == 0) continue;
+
+                validateAccountHealthInvariant(controller, onBehalfOfAccount);
             }
         }
     }
@@ -162,10 +200,19 @@ contract AccountHealthAssertion is Assertion {
 
             // Skip non-contract addresses
             if (targetCollateral.code.length == 0) continue;
+            if (onBehalfOfAccount == address(0)) continue;
 
-            // Validate the onBehalfOfAccount (authenticated account for this operation)
-            if (onBehalfOfAccount != address(0)) {
-                validateAccountHealthInvariant(targetCollateral, onBehalfOfAccount);
+            // Check 1: Validate health at the collateral vault
+            validateAccountHealthInvariant(targetCollateral, onBehalfOfAccount);
+
+            // Check 2: Validate health at controller vaults
+            address[] memory controllers = evc.getControllers(onBehalfOfAccount);
+
+            for (uint256 k = 0; k < controllers.length; k++) {
+                address controller = controllers[k];
+                if (controller.code.length == 0) continue;
+
+                validateAccountHealthInvariant(controller, onBehalfOfAccount);
             }
         }
     }
@@ -211,57 +258,31 @@ contract AccountHealthAssertion is Assertion {
     /// @notice Checks if an account is healthy for a given vault
     /// @param vault The vault address (controller vault)
     /// @param account The account address to check
-    /// @return healthy True if the account is healthy (collateralValue >= liabilityValue)
+    /// @return healthy True if the account is healthy
     ///
     /// HEALTH CHECK STRATEGY:
-    /// 1. Try to call the vault's checkAccountStatus() function
-    ///    - If it succeeds (returns magic value), account is healthy
-    ///    - If it reverts, account is unhealthy
-    /// 2. If checkAccountStatus() is not available, use accountLiquidity()
-    ///    - Get collateral and liability values
-    ///    - Account is healthy if collateralValue >= liabilityValue
-    /// 3. If both fail, treat account as unhealthy (conservative approach)
+    /// Calls the vault's checkAccountStatus() function (required by IVault interface)
+    /// - If it returns the magic value 0xb168c58f, account is healthy
+    /// - If it reverts or returns wrong value, account is unhealthy
     function isAccountHealthy(address vault, address account) internal view returns (bool healthy) {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get enabled collaterals for the account
         address[] memory collaterals = evc.getCollaterals(account);
 
-        // Try to use checkAccountStatus() first
-        // The function should return magic value 0xb168c58f if healthy, or revert if unhealthy
-        (bool success, bytes memory result) =
-            vault.staticcall(abi.encodeWithSelector(IVault.checkAccountStatus.selector, account, collaterals));
-
-        if (success && result.length >= 32) {
-            bytes4 magicValue = abi.decode(result, (bytes4));
+        // Use checkAccountStatus() - all vaults implementing IVault must have this
+        // The function returns magic value 0xb168c58f if healthy, or reverts if unhealthy
+        try IVault(vault).checkAccountStatus(account, collaterals) returns (bytes4 magicValue) {
             // Magic value is 0xb168c58f (selector of checkAccountStatus)
             if (magicValue == IVault.checkAccountStatus.selector) {
                 return true;
             }
+            // If wrong magic value returned, treat as unhealthy
+            return false;
+        } catch {
+            // If checkAccountStatus reverts, account is unhealthy
+            return false;
         }
-
-        // If checkAccountStatus() failed or is not available, try accountLiquidity()
-        // accountLiquidity(address account, bool liquidation) returns (uint256 collateralValue, uint256 liabilityValue)
-        // We use liquidation=false for regular health checks
-        (bool liquiditySuccess, bytes memory liquidityResult) =
-            vault.staticcall(abi.encodeWithSignature("accountLiquidity(address,bool)", account, false));
-
-        if (liquiditySuccess && liquidityResult.length >= 64) {
-            (uint256 collateralValue, uint256 liabilityValue) = abi.decode(liquidityResult, (uint256, uint256));
-
-            // TODO: Should we skip accounts with no position (both values are zero)?
-            // For now, we treat zero position accounts as healthy
-            if (collateralValue == 0 && liabilityValue == 0) {
-                return true;
-            }
-
-            // Account is healthy if collateral >= liability
-            return collateralValue >= liabilityValue;
-        }
-
-        // If both methods fail, conservatively treat as unhealthy
-        // This prevents false negatives but may cause false positives
-        return false;
     }
 }
 

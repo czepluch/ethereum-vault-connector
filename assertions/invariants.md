@@ -113,7 +113,7 @@ Or equivalently (contrapositive):
 - **Unauthorized account liquidation** - Prevents vault operations from making accounts vulnerable to liquidation
 - **Collateral manipulation attacks** - Detects operations that improperly reduce account health
 - **Protocol bugs** that cause unexpected solvency violations
-- **Cross-vault attacks** where operations on one vault harm account health in another
+- **Cross-vault health impacts** - Catches when operations on one vault (e.g., withdrawing collateral) affect account health at controller vaults
 - **Economic attacks** that drain account value below safe thresholds
 
 ### What This Allows
@@ -152,7 +152,37 @@ For each vault function called through the EVC, the assertion extracts affected 
 
 ### Health Check Mechanism
 
-For each affected account A and the vault V being called:
+For each affected account A, the assertion checks health at TWO locations:
+
+#### Check 1: Direct vault check
+
+- The vault V that was directly called in the transaction
+
+#### Check 2: Controller vault checks (NEW - addresses cross-vault impacts)
+
+- All controller vaults for account A (via `evc.getControllers(A)`)
+- This is critical because operations on collateral vaults affect controller health
+
+#### Why both checks are needed
+
+When a user withdraws collateral from VaultA (collateral vault), the controller VaultB's view of account health changes even though VaultB wasn't directly touched. This is by EVC design: `checkAccountStatus()` receives all enabled collaterals and prices them together. The controller must evaluate the complete picture of account solvency.
+
+**Example:**
+
+```text
+Initial state:
+- User has 100 tokens in VaultA (collateral)
+- User borrowed 80 tokens from VaultB (controller)
+- Health at VaultB: collateral (100) >= liability (80) ✅
+
+Operation: Withdraw 30 tokens from VaultA
+- VaultB is NOT in the batch operations
+- But VaultB's health check will now see: collateral (70) < liability (80) ❌
+
+Assertion: Checks health at BOTH VaultA and VaultB, catches the violation
+```
+
+For each vault V and account A:
 
 1. **Pre-transaction check:**
    - Fork to pre-transaction state: `ph.forkPreTx()`

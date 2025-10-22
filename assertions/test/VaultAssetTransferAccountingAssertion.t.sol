@@ -7,9 +7,11 @@ import {VaultAssetTransferAccountingAssertion} from "../src/VaultAssetTransferAc
 import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
-import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {ERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import {ERC4626} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
+
+// Import shared mocks
+import {MockERC20} from "./mocks/MockERC20.sol";
+import {MockEVault} from "./mocks/MockEVault.sol";
+import {EventManipulatorVault} from "./mocks/MaliciousVaults.sol";
 
 /// @title TestVaultAssetTransferAccountingAssertion
 /// @notice Comprehensive test suite for the VaultAssetTransferAccountingAssertion assertion
@@ -19,8 +21,8 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
     VaultAssetTransferAccountingAssertion public assertion;
 
     // Test vaults (real protocol behavior)
-    RealEVault public vault1;
-    RealEVault public vault2;
+    MockEVault public vault1;
+    MockEVault public vault2;
 
     // Test tokens
     MockERC20 public token1;
@@ -42,8 +44,8 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
         token2 = new MockERC20("Test Token 2", "TT2");
 
         // Deploy test vaults (real protocol behavior)
-        vault1 = new RealEVault(token1, evc);
-        vault2 = new RealEVault(token2, evc);
+        vault1 = new MockEVault(token1, evc);
+        vault2 = new MockEVault(token2, evc);
 
         // Setup test environment
         vm.deal(user1, 100 ether);
@@ -126,7 +128,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(RealEVault.borrow.selector, 30e18, user1);
+        items[0].data = abi.encodeWithSelector(MockEVault.borrow.selector, 30e18, user1);
 
         // Register assertion for the batch call
         cl.assertion({
@@ -211,7 +213,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
         items[1].targetContract = address(vault1);
         items[1].onBehalfOfAccount = user1;
         items[1].value = 0;
-        items[1].data = abi.encodeWithSelector(RealEVault.borrow.selector, 25e18, user1);
+        items[1].data = abi.encodeWithSelector(MockEVault.borrow.selector, 25e18, user1);
 
         // Register assertion for the batch call
         cl.assertion({
@@ -402,7 +404,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
             address(vault2),  // collateral vault
             user1,            // violator being liquidated
             0,
-            abi.encodeWithSelector(RealEVault.seizeCollateral.selector, user1, user2, 50e18)  // seize 50 shares
+            abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18)  // seize 50 shares
         );
 
         // Assertion should pass - Transfer event (50e18) matches Withdraw event (50e18)
@@ -425,7 +427,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
     /// EXPECTED RESULT: Assertion fails (50e18 > 0)
     function testAssetTransferAccounting_Batch_MissingWithdrawEvent_Fails() public {
         // Deploy malicious vault
-        MaliciousVault maliciousVault = new MaliciousVault(token1, evc);
+        EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
 
         // Approve malicious vault
         vm.prank(user1);
@@ -471,7 +473,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
     /// EXPECTED RESULT: Assertion fails (30e18 > 0)
     function testAssetTransferAccounting_Batch_MissingBorrowEvent_Fails() public {
         // Deploy malicious vault with liquidity
-        MaliciousVault maliciousVault = new MaliciousVault(token1, evc);
+        EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
 
         // Approve malicious vault
         vm.prank(user2);
@@ -489,7 +491,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
         items[0].targetContract = address(maliciousVault);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(RealEVault.borrow.selector, 30e18, user1);
+        items[0].data = abi.encodeWithSelector(MockEVault.borrow.selector, 30e18, user1);
 
         // Register assertion for the batch call
         cl.assertion({
@@ -517,7 +519,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
     /// EXPECTED RESULT: Assertion fails (100e18 > 50e18)
     function testAssetTransferAccounting_Batch_UnderreportedEvent_Fails() public {
         // Deploy malicious vault
-        MaliciousVault maliciousVault = new MaliciousVault(token1, evc);
+        EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
 
         // Approve malicious vault
         vm.prank(user1);
@@ -562,7 +564,7 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
     /// EXPECTED RESULT: Assertion fails (150e18 > 50e18)
     function testAssetTransferAccounting_Batch_ExtraTransfer_Fails() public {
         // Deploy malicious vault
-        MaliciousVault maliciousVault = new MaliciousVault(token1, evc);
+        EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
 
         // Approve malicious vault
         vm.prank(user1);
@@ -655,262 +657,5 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
 
         vm.prank(user1);
         evc.batch(items);
-    }
-}
-
-// ========================================
-// MOCK CONTRACTS
-// ========================================
-
-/// @notice Simple ERC20 mock for testing
-contract MockERC20 is ERC20 {
-    constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-}
-
-/// @notice Real EVault implementation following the protocol standard
-/// @dev This represents correct, non-malicious vault behavior
-/// Handles EVC context properly by using getCurrentOnBehalfOfAccount()
-contract RealEVault is ERC4626 {
-    // Borrow event - emitted when assets are borrowed
-    event Borrow(address indexed account, uint256 assets);
-
-    IEVC public immutable evc;
-
-    // Track borrows (simplified for testing)
-    mapping(address => uint256) public borrows;
-
-    constructor(IERC20 _asset, IEVC _evc) ERC4626(_asset) ERC20("Real EVault", "rEV") {
-        evc = _evc;
-    }
-
-    /// @notice Get the actual account from EVC context or fallback to msg.sender
-    function _getActualCaller() internal view returns (address) {
-        if (msg.sender == address(evc)) {
-            (address account,) = evc.getCurrentOnBehalfOfAccount(address(0));
-            return account != address(0) ? account : msg.sender;
-        }
-        return msg.sender;
-    }
-
-    /// @notice Deposit with EVC context support
-    /// @dev Overrides ERC4626 to use actual caller from EVC context
-    function deposit(uint256 assets, address receiver) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-
-        uint256 maxAssets = maxDeposit(receiver);
-        if (assets > maxAssets) {
-            revert("ERC4626: deposit more than max");
-        }
-
-        uint256 shares = previewDeposit(assets);
-        _deposit(caller, receiver, assets, shares);
-
-        return shares;
-    }
-
-    /// @notice Withdraw with EVC context support
-    /// @dev Overrides ERC4626 to use actual caller from EVC context
-    function withdraw(uint256 assets, address receiver, address owner) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-
-        uint256 maxAssets = maxWithdraw(owner);
-        if (assets > maxAssets) {
-            revert("ERC4626: withdraw more than max");
-        }
-
-        uint256 shares = previewWithdraw(assets);
-        _withdraw(caller, receiver, owner, assets, shares);
-
-        return shares;
-    }
-
-    /// @notice Borrow assets from the vault
-    /// @dev Properly emits both Borrow and Transfer events
-    function borrow(uint256 assets, address receiver) external returns (uint256) {
-        // Transfer assets to receiver
-        IERC20(asset()).transfer(receiver, assets);
-
-        // Track borrow
-        borrows[receiver] += assets;
-
-        // Emit Borrow event (Transfer event is emitted by ERC20.transfer)
-        emit Borrow(receiver, assets);
-
-        return assets;
-    }
-
-    /// @notice Helper function for controlCollateral testing
-    /// @dev Returns the balance of an account - proper return value for controlCollateral
-    function getAccountBalance(address account) external view returns (uint256) {
-        return balanceOf(account);
-    }
-
-    /// @notice Check account status - required for vaults to be enabled as controllers/collaterals
-    /// @dev Returns the function selector as magic value (standard EVC pattern)
-    function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
-        // Return function selector as magic value (0xb168c58f)
-        return this.checkAccountStatus.selector;
-    }
-
-    /// @notice Check vault status - required for vault status checks
-    /// @dev Returns the function selector as magic value (standard EVC pattern)
-    function checkVaultStatus() external pure returns (bytes4) {
-        // Return function selector as magic value (0x4b3d1223)
-        return this.checkVaultStatus.selector;
-    }
-
-    /// @notice Seize collateral during liquidation - called via controlCollateral
-    /// @dev This simulates a liquidation scenario where collateral is seized
-    /// In a real liquidation, shares are transferred from violator to liquidator
-    /// The liquidator can then redeem these shares for underlying assets
-    /// @param from The account being liquidated
-    /// @param to The liquidator receiving the collateral
-    /// @param shares The amount of shares to seize
-    function seizeCollateral(address from, address to, uint256 shares) external returns (bool) {
-        // In a real vault, this would check that msg.sender is EVC and we're in controlCollateral context
-        // For testing, we'll just do the transfer which will emit Transfer event
-
-        // Calculate assets from shares for the Withdraw event
-        uint256 assets = convertToAssets(shares);
-
-        // Transfer shares from violator to liquidator
-        // This emits a Transfer event (from -> to)
-        _transfer(from, to, shares);
-
-        // Emit Withdraw event to signal collateral seizure
-        // In ERC4626, Withdraw is typically emitted when shares are burned and assets withdrawn
-        // Here we emit it to represent the liquidation seizure event
-        emit Withdraw(address(this), to, from, assets, shares);
-
-        return true;
-    }
-}
-
-/// @notice Malicious vault with behavior flags to simulate attacks
-/// @dev Used for testing assertion failure cases
-contract MaliciousVault is ERC4626 {
-    // Borrow event - same as RealEVault
-    event Borrow(address indexed account, uint256 assets);
-
-    IEVC public immutable evc;
-
-    // Behavior flags
-    bool public shouldSkipWithdrawEvent;
-    bool public shouldSkipBorrowEvent;
-    bool public shouldUnderreportAmount;
-    bool public shouldMakeExtraTransfer;
-
-    // Track borrows
-    mapping(address => uint256) public borrows;
-
-    constructor(IERC20 _asset, IEVC _evc) ERC4626(_asset) ERC20("Malicious Vault", "mEV") {
-        evc = _evc;
-    }
-
-    /// @notice Get the actual account from EVC context or fallback to msg.sender
-    function _getActualCaller() internal view returns (address) {
-        if (msg.sender == address(evc)) {
-            (address account,) = evc.getCurrentOnBehalfOfAccount(address(0));
-            return account != address(0) ? account : msg.sender;
-        }
-        return msg.sender;
-    }
-
-    /// @notice Deposit with EVC context support
-    /// @dev Overrides ERC4626 to use actual caller from EVC context
-    function deposit(uint256 assets, address receiver) public virtual override returns (uint256) {
-        address caller = _getActualCaller();
-
-        uint256 maxAssets = maxDeposit(receiver);
-        if (assets > maxAssets) {
-            revert("ERC4626: deposit more than max");
-        }
-
-        uint256 shares = previewDeposit(assets);
-        _deposit(caller, receiver, assets, shares);
-
-        return shares;
-    }
-
-    function setShouldSkipWithdrawEvent(
-        bool value
-    ) external {
-        shouldSkipWithdrawEvent = value;
-    }
-
-    function setShouldSkipBorrowEvent(
-        bool value
-    ) external {
-        shouldSkipBorrowEvent = value;
-    }
-
-    function setShouldUnderreportAmount(
-        bool value
-    ) external {
-        shouldUnderreportAmount = value;
-    }
-
-    function setShouldMakeExtraTransfer(
-        bool value
-    ) external {
-        shouldMakeExtraTransfer = value;
-    }
-
-    /// @notice Malicious withdraw - can skip or under-report event
-    function withdraw(
-        uint256 assets,
-        address receiver,
-        address owner
-    ) public virtual override returns (uint256 shares) {
-        address caller = _getActualCaller();
-
-        // Calculate shares (following ERC4626 logic)
-        shares = previewWithdraw(assets);
-
-        // Make the actual transfer
-        IERC20(asset()).transfer(receiver, assets);
-
-        // Burn shares
-        _burn(owner, shares);
-
-        // Conditionally emit Withdraw event based on flags
-        if (!shouldSkipWithdrawEvent) {
-            if (shouldUnderreportAmount) {
-                // Under-report: emit half the actual amount
-                emit Withdraw(caller, receiver, owner, assets / 2, shares);
-            } else {
-                // Normal: emit correct amount
-                emit Withdraw(caller, receiver, owner, assets, shares);
-            }
-        }
-        // If shouldSkipWithdrawEvent, don't emit event at all
-
-        // If flag is set, make extra unaccounted transfer
-        if (shouldMakeExtraTransfer) {
-            IERC20(asset()).transfer(receiver, 100e18);
-        }
-
-        return shares;
-    }
-
-    /// @notice Malicious borrow - can skip event
-    function borrow(uint256 assets, address receiver) external returns (uint256) {
-        // Transfer assets to receiver
-        IERC20(asset()).transfer(receiver, assets);
-
-        // Track borrow
-        borrows[receiver] += assets;
-
-        // Conditionally emit Borrow event
-        if (!shouldSkipBorrowEvent) {
-            emit Borrow(receiver, assets);
-        }
-        // If shouldSkipBorrowEvent, don't emit event at all
-
-        return assets;
     }
 }

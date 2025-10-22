@@ -4,12 +4,7 @@ pragma solidity ^0.8.13;
 import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
-
-/// @notice Interface for ERC4626 vault
-interface IERC4626 {
-    function totalAssets() external view returns (uint256);
-    function totalSupply() external view returns (uint256);
-}
+import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @title VaultExchangeRateSpikeAssertion
 /// @notice Prevents the vault's exchange rate from changing by more than 5% in a single transaction
@@ -157,6 +152,9 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
     /// @dev Compares pre/post exchange rates and ensures change is within 5%
     /// @param vault The vault address to validate exchange rate for
     function validateVaultExchangeRateSpike(address vault) internal {
+        // Skip zero address
+        if (vault == address(0)) return;
+
         // Skip skim() operations - they legitimately change rate by claiming unaccounted assets
         if (isSkimOperation(vault)) {
             return;

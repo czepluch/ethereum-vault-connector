@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
+import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @title VaultSharePriceAssertion
 /// @notice Monitors vault share prices and ensures they don't decrease unless bad debt socialization occurs
@@ -187,14 +188,22 @@ contract VaultSharePriceAssertion is Assertion {
     function getSharePrice(
         address vault
     ) internal view returns (uint256 sharePrice) {
-        // Try to get totalAssets and totalSupply using staticcall for gas efficiency
-        (bool success1, bytes memory data1) = vault.staticcall(abi.encodeWithSelector(0x01e1d114)); // totalAssets()
-        if (!success1 || data1.length < 32) return 0;
-        uint256 totalAssets = abi.decode(data1, (uint256));
+        // Get totalAssets and totalSupply from ERC4626 interface
+        // Use try-catch because the contract might not be ERC4626 (e.g., non-vault in batch)
+        uint256 totalAssets;
+        uint256 totalSupply;
 
-        (bool success2, bytes memory data2) = vault.staticcall(abi.encodeWithSelector(0x18160ddd)); // totalSupply()
-        if (!success2 || data2.length < 32) return 0;
-        uint256 totalSupply = abi.decode(data2, (uint256));
+        try IERC4626(vault).totalAssets() returns (uint256 assets) {
+            totalAssets = assets;
+        } catch {
+            return 0; // Not an ERC4626 vault, return 0 to skip
+        }
+
+        try IERC4626(vault).totalSupply() returns (uint256 supply) {
+            totalSupply = supply;
+        } catch {
+            return 0; // Not an ERC4626 vault, return 0 to skip
+        }
 
         // Calculate share price (totalAssets * 1e18 / totalSupply)
         if (totalSupply > 0) {

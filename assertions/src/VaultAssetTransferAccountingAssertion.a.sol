@@ -5,6 +5,7 @@ import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
+import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @title VaultAssetTransferAccountingAssertion
 /// @notice Ensures all asset transfers from vaults are properly accounted for by Withdraw or Borrow events
@@ -215,15 +216,8 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
     /// @notice Gets the asset token address for a vault
     /// @dev Calls the vault's asset() function (ERC4626 standard)
     /// @param vault The vault address to query
-    /// @return The asset token address, or address(0) if the call fails
+    /// @return The asset token address
     function getAssetAddress(address vault) internal view returns (address) {
-        // asset() selector: 0x38d52e0f
-        (bool success, bytes memory data) = vault.staticcall(abi.encodeWithSelector(0x38d52e0f));
-
-        if (!success || data.length < 32) {
-            return address(0);
-        }
-
-        return abi.decode(data, (address));
+        return IERC4626(vault).asset();
     }
 }
