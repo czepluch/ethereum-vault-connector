@@ -36,9 +36,6 @@ Then the following invariant must hold:
 SP_post(V) >= SP_pre(V) ∨ BDS(T,V)
 ```
 
-**In Plain English:**
-"A vault's share price cannot decrease unless bad debt socialization occurs"
-
 ### What This Protects Against
 
 - **Malicious vault implementations** that steal funds from depositors
@@ -51,23 +48,6 @@ SP_post(V) >= SP_pre(V) ∨ BDS(T,V)
 - **Normal vault operations** (deposits, withdrawals, yield generation)
 - **Bad debt socialization** (as designed in the Euler protocol)
 - **Legitimate share price increases** from yield or other mechanisms
-
-### Bad Debt Socialization Detection
-
-The assertion detects bad debt socialization by monitoring for these events occurring together in the same transaction:
-
-1. **Repay events** where the account is not `address(0)` (repay from liquidator)
-2. **Withdraw events** where the sender is `address(0)` (withdraw from address(0))
-
-Both events must occur together to indicate legitimate bad debt socialization.
-
-### Monitored Operations
-
-The assertion intercepts and validates all EVC operations that can affect vault share prices:
-
-- `EVC.batch()` - Batch operations (primary vault interaction method)
-- `EVC.call()` - Single call operations
-- `EVC.controlCollateral()` - Collateral control operations
 
 ### Edge Cases Handled
 
@@ -105,9 +85,6 @@ Or equivalently (contrapositive):
 "A vault operation cannot make a healthy account unhealthy"
 ```
 
-**In Plain English:**
-"A vault operation cannot make a healthy account unhealthy"
-
 ### What This Protects Against
 
 - **Unauthorized account liquidation** - Prevents vault operations from making accounts vulnerable to liquidation
@@ -122,34 +99,6 @@ Or equivalently (contrapositive):
 - **Health-neutral operations** like transfers between healthy accounts
 - **Legitimate health improvements** from deposits, repayments, etc.
 
-### Affected Account Detection
-
-The assertion determines which accounts to validate by using `getCallInputs()` to parse EVC function calls and extract vault operation parameters.
-
-**Monitored EVC Operations:**
-
-- `batch(BatchItem[] items)` - Parse BatchItems for vault calls
-- `call(address targetContract, address onBehalfOfAccount, uint256 value, bytes data)` - Parse call parameters
-- `controlCollateral(address targetCollateral, address onBehalfOfAccount, uint256 value, bytes data)` - Parse parameters
-
-**Vault Function Classification:**
-
-For each vault function called through the EVC, the assertion extracts affected accounts based on the function selector:
-
-**Type 1 - Use `onBehalfOfAccount` from EVC call:**
-
-- `transfer(address to, uint256 amount)` - Check the sender (`onBehalfOfAccount`)
-- `borrow(uint256 amount, address receiver)` - Check the borrower (`onBehalfOfAccount`)
-- `repayWithShares(uint256 amount, address receiver)` - Check the repayer (`onBehalfOfAccount`)
-- `pullDebt(uint256 amount, address from)` - Check the account pulling debt (`onBehalfOfAccount`)
-
-**Type 2 - Decode parameter from vault calldata:**
-
-- `transferFrom(address from, address to, uint256 amount)` - Check `from` (1st parameter)
-- `transferFromMax(address from, address to)` - Check `from` (1st parameter)
-- `withdraw(uint256 amount, address receiver, address owner)` - Check `owner` (3rd parameter)
-- `redeem(uint256 amount, address receiver, address owner)` - Check `owner` (3rd parameter)
-
 ### Health Check Mechanism
 
 For each affected account A, the assertion checks health at TWO locations:
@@ -158,7 +107,7 @@ For each affected account A, the assertion checks health at TWO locations:
 
 - The vault V that was directly called in the transaction
 
-#### Check 2: Controller vault checks (NEW - addresses cross-vault impacts)
+#### Check 2: Controller vault checks
 
 - All controller vaults for account A (via `evc.getControllers(A)`)
 - This is critical because operations on collateral vaults affect controller health
@@ -181,32 +130,6 @@ Operation: Withdraw 30 tokens from VaultA
 
 Assertion: Checks health at BOTH VaultA and VaultB, catches the violation
 ```
-
-For each vault V and account A:
-
-1. **Pre-transaction check:**
-   - Fork to pre-transaction state: `ph.forkPreTx()`
-   - Query vault: `V.accountLiquidity(A, false)` → `(collateralValue, liabilityValue)`
-   - Determine if account was healthy: `collateralValue >= liabilityValue`
-
-2. **Post-transaction check:**
-   - Fork to post-transaction state: `ph.forkPostTx()`
-   - Query vault: `V.accountLiquidity(A, false)` → `(collateralValue, liabilityValue)`
-   - Determine if account is healthy: `collateralValue >= liabilityValue`
-
-3. **Invariant validation:**
-   - Assert: `healthy_pre → healthy_post`
-   - Revert with descriptive message if healthy account became unhealthy
-
-**Note:** The `liquidation` parameter is set to `false` to check health using borrow LTV thresholds rather than liquidation LTV thresholds.
-
-### Monitored Operations
-
-The assertion intercepts and validates all EVC operations that can affect account health:
-
-- `EVC.batch()` - Batch operations (primary vault interaction method)
-- `EVC.call()` - Single call operations
-- `EVC.controlCollateral()` - Collateral control operations
 
 ### Edge Cases Handled
 
@@ -240,9 +163,6 @@ Then the following invariant must hold:
    balance >= cash
 ```
 
-**In Plain English:**
-"The vault's actual token balance must always be at least what it claims to have as cash"
-
 ### What This Protects Against
 
 - **Asset theft** where tokens leave the vault without cash being decremented
@@ -259,25 +179,6 @@ Then the following invariant must hold:
 - **Repays** (balance and cash both increase by same amount)
 - **Donations to vault** (balance > cash is acceptable - unaccounted assets can be claimed via skim())
 
-### Implementation Approach
-
-The assertion performs a simple check after each transaction:
-
-- Query vault's asset token via `vault.asset()`
-- Get actual balance via `asset.balanceOf(vault)`
-- Get internal cash accounting via `vault.cash()`
-- Assert: `balance >= cash`
-
-**Vault Detection:** Use `getCallInputs()` to find all vault operations through EVC (batch/call/controlCollateral)
-
-### Monitored Operations
-
-The assertion intercepts and validates all EVC operations that can affect vault accounting:
-
-- `EVC.batch()` - Batch operations (primary vault interaction method)
-- `EVC.call()` - Single call operations
-- `EVC.controlCollateral()` - Collateral control operations
-
 ### Edge Cases Handled
 
 - **Non-EVault contracts** (no asset() or cash() functions) - Skipped gracefully
@@ -288,22 +189,7 @@ The assertion intercepts and validates all EVC operations that can affect vault 
 
 ### Relationship to VaultAssetTransferAccountingAssertion
 
-This assertion is **complementary but distinct** from VaultAssetTransferAccountingAssertion:
-
-- **VaultAccountingIntegrityAssertion**: Checks actual balance >= internal cash accounting (state-based)
-- **VaultAssetTransferAccountingAssertion**: Checks Transfer events match Withdraw/Borrow events (event-based)
-
-**Why both are needed:**
-
-- VaultAccountingIntegrityAssertion catches balance/cash divergence
-- VaultAssetTransferAccountingAssertion catches missing events even if balance/cash don't diverge
-- Together they provide defense-in-depth: both state AND events must be correct
-
-### Future Enhancements
-
-- **Note:** Could add change tracking: `Δbalance == Δcash` for more precise detection of exact transaction causing divergence
-- **Note:** Could allow small tolerance (1-2 wei) for rounding differences if needed in practice
-- **Note:** Consider checking fees separately if they affect balance without affecting cash in some vault implementations
+These two assertions provide complementary checks: VaultAccountingIntegrityAssertion validates state (balance >= cash) while VaultAssetTransferAccountingAssertion validates events (Transfer events match Withdraw/Borrow events).
 
 ## 4. VaultExchangeRateSpikeAssertion
 
@@ -331,9 +217,6 @@ Then the following invariant must hold:
 changePct <= THRESHOLD (5%)
 ```
 
-**In Plain English:**
-"The exchange rate cannot suddenly change by more than 5% in a single transaction"
-
 ### What This Protects Against
 
 - **Donation attacks** where attackers manipulate share price
@@ -347,30 +230,6 @@ changePct <= THRESHOLD (5%)
 - **Small rate fluctuations** from deposits/withdrawals
 - **Bad debt socialization** (covered by VaultSharePriceAssertion)
 
-### Implementation Approach
-
-**Vault Detection:** Use `getCallInputs()` to find vault operations through EVC
-
-**Pre and Post-transaction checks:**
-
-- Fork to pre-transaction state:
-  - Calculate exchange rate: `ratePre = vault.totalAssets() * 1e18 / vault.totalSupply()`
-- Fork to post-transaction state:
-  - Calculate exchange rate: `ratePost = vault.totalAssets() * 1e18 / vault.totalSupply()`
-- Calculate absolute percentage change in basis points
-- Assert: change <= 500 basis points (5%)
-- Check both increases and decreases
-
-**Threshold:** 5% (500 basis points)
-
-### Monitored Operations
-
-The assertion intercepts and validates all EVC operations that can affect exchange rates:
-
-- `EVC.batch()` - Batch operations (primary vault interaction method)
-- `EVC.call()` - Single call operations
-- `EVC.controlCollateral()` - Collateral control operations
-
 ### Edge Cases Handled
 
 - **Zero total supply** (new or empty vault) - Skipped
@@ -380,13 +239,6 @@ The assertion intercepts and validates all EVC operations that can affect exchan
 ### Exemptions
 
 - **`skim()` operations** - Exempted (claims unaccounted assets, legitimately changes rate)
-
-### Future Enhancements
-
-- **Note:** Threshold of 5% may need adjustment based on vault characteristics
-- **Note:** Smaller vaults (< $1M TVL) might need higher thresholds due to rounding impact
-- **Note:** Some vault types might legitimately have higher volatility and need custom thresholds
-- **Note:** Consider per-vault configurable thresholds in future versions
 
 ## 5. VaultAssetTransferAccountingAssertion
 
@@ -418,9 +270,6 @@ Then the following invariant must hold:
 totalTransferred <= totalAccounted
 ```
 
-**In Plain English:**
-"Every asset token that leaves the vault must be accounted for by a Withdraw or Borrow event"
-
 ### What This Protects Against
 
 - **Unauthorized asset extraction** without proper event emission
@@ -436,42 +285,6 @@ totalTransferred <= totalAccounted
 - **Multiple operations** in same transaction (sum of all transfers matched against sum of all events)
 - **Flash loans** (assets transferred out and returned in same tx, net should match events)
 
-### Implementation Approach
-
-**Event Parsing:**
-
-The assertion monitors three types of events:
-
-1. **Transfer events from asset contract:**
-   - Event: `Transfer(address indexed from, address indexed to, uint256 amount)`
-   - Filter: `from == vault address`
-   - Capture: `amount` for each transfer
-
-2. **Withdraw events from vault:**
-   - Event: `Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)`
-   - Capture: `assets` amount for each withdrawal
-
-3. **Borrow events from vault:**
-   - Event: `Borrow(address indexed account, uint256 assets)`
-   - Capture: `assets` amount for each borrow
-
-**Validation Logic:**
-
-- Sum all Transfer amounts where `from == vault`
-- Sum all Withdraw `assets` amounts
-- Sum all Borrow `assets` amounts
-- Assert: `totalTransferred <= totalWithdrawn + totalBorrowed`
-
-**Vault Detection:** Use `getCallInputs()` to find vault operations through EVC, then parse events from those vaults and their asset tokens
-
-### Monitored Operations
-
-The assertion intercepts and validates all EVC operations that can result in asset transfers:
-
-- `EVC.batch()` - Batch operations (primary vault interaction method)
-- `EVC.call()` - Single call operations
-- `EVC.controlCollateral()` - Collateral control operations
-
 ### Edge Cases Handled
 
 - **Multiple transfers in one transaction** - Sum all transfers and all accounting events
@@ -484,21 +297,4 @@ The assertion intercepts and validates all EVC operations that can result in ass
 
 ### Relationship to VaultAccountingIntegrityAssertion
 
-This assertion is **complementary but distinct** from VaultAccountingIntegrityAssertion:
-
-- **VaultAccountingIntegrityAssertion**: Checks balance changes match accounting changes (cash + borrows)
-- **VaultAssetTransferAccountingAssertion**: Checks Transfer events match Withdraw/Borrow events
-
-**Why both are needed:**
-
-- VaultAccountingIntegrityAssertion catches silent balance manipulation
-- VaultAssetTransferAccountingAssertion catches missing events even if balance/accounting sync
-- Together they provide defense-in-depth: both event emission AND balance/accounting must be correct
-
-### Future Enhancements
-
-- **Note:** Could also check transfers IN to vault match Deposit/Repay events (symmetric check)
-- **Note:** May need to handle special cases for fee collection if fees are transferred separately
-- **Note:** Could track flash loan events explicitly and verify round-trip transfers
-- **Note:** Consider allowing small tolerance for rounding differences if multiple small operations aggregate
-- **Note:** Could extend to verify event parameters beyond just amounts (e.g., verify receivers match expected addresses)
+These two assertions provide complementary checks: VaultAccountingIntegrityAssertion validates state (balance >= cash) while VaultAssetTransferAccountingAssertion validates events (Transfer events match Withdraw/Borrow events).
