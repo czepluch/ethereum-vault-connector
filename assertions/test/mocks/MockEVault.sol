@@ -24,6 +24,9 @@ contract MockEVault is ERC4626 {
     mapping(address => uint256) public borrows;
     uint256 public totalBorrows;
 
+    // Testing flags
+    bool public shouldLiquidateHealthyAccount; // Flag to break liquidation invariant
+
     // Bad debt socialization tracking
     event DebtSocialized(address indexed account, uint256 amount);
 
@@ -33,6 +36,17 @@ contract MockEVault is ERC4626 {
 
     constructor(IERC20 _asset, IEVC _evc) ERC4626(_asset) ERC20("Mock EVault", "mEV") {
         evc = _evc;
+    }
+
+    // ========================================
+    // TESTING FLAGS
+    // ========================================
+
+    /// @notice Set flag to liquidate healthy accounts (for testing assertion failures)
+    function setLiquidateHealthyAccount(
+        bool value
+    ) external {
+        shouldLiquidateHealthyAccount = value;
     }
 
     // ========================================
@@ -170,8 +184,24 @@ contract MockEVault is ERC4626 {
     // ========================================
 
     /// @notice Check account status - required for vaults to be enabled as controllers
-    /// @dev Returns the function selector as magic value (standard EVC pattern)
-    function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
+    /// @dev Returns the function selector as magic value if healthy, reverts if unhealthy
+    function checkAccountStatus(address account, address[] memory collaterals) external view returns (bytes4) {
+        // Calculate total collateral value
+        uint256 collateralValue = 0;
+        for (uint256 i = 0; i < collaterals.length; i++) {
+            try MockEVault(collaterals[i]).balanceOf(account) returns (uint256 balance) {
+                collateralValue += balance;
+            } catch {
+                // Skip collaterals that don't support balanceOf
+            }
+        }
+
+        // Get liability value for this account
+        uint256 liabilityValue = borrows[account];
+
+        // Account is healthy if collateralValue >= liabilityValue
+        require(collateralValue >= liabilityValue, "Account unhealthy");
+
         return this.checkAccountStatus.selector;
     }
 
@@ -262,9 +292,73 @@ contract MockEVault is ERC4626 {
     }
 
     // ========================================
+    // LIQUIDATION
+    // ========================================
+
+    /// @notice Liquidate an unhealthy account
+    /// @param violator Address that may be in collateral violation
+    /// @param collateral Collateral to be seized
+    /// @param repayAssets Amount of underlying debt to transfer
+    /// @param minYieldBalance Minimum acceptable collateral to transfer
+    /// @dev Transfers debt from violator to liquidator (caller)
+    ///      Transfers collateral shares from violator to liquidator
+    ///      If shouldLiquidateHealthyAccount flag is set, adds extra debt to violator to break health
+    function liquidate(address violator, address collateral, uint256 repayAssets, uint256 minYieldBalance) external {
+        require(violator != address(0), "Invalid violator");
+        require(collateral != address(0), "Invalid collateral");
+        require(repayAssets > 0, "Invalid repay amount");
+
+        address liquidator = _getActualCaller();
+
+        // Transfer debt from violator to liquidator
+        // Liquidator pays off violator's debt
+        require(borrows[violator] >= repayAssets, "Repay exceeds violator debt");
+
+        // Transfer assets from liquidator to cover the debt
+        IERC20(asset()).transferFrom(liquidator, address(this), repayAssets);
+
+        // Reduce violator's debt
+        borrows[violator] -= repayAssets;
+
+        // If flag is set, add extra debt to violator to break health invariant
+        if (shouldLiquidateHealthyAccount) {
+            // Add massive debt to make the violator unhealthy (10x the repayment)
+            borrows[violator] += repayAssets * 10;
+            totalBorrows += repayAssets * 10;
+        }
+
+        // Calculate collateral to seize (simplified: 1.1x repayment for liquidation bonus)
+        uint256 collateralShares = (repayAssets * 110) / 100;
+        require(collateralShares >= minYieldBalance, "Insufficient yield");
+
+        // Transfer collateral shares from violator to liquidator
+        // This would normally call the collateral vault's transfer
+        try MockEVault(collateral).transferFrom(violator, liquidator, collateralShares) {
+            // Successful collateral transfer
+        } catch {
+            // If external transfer fails, try internal transfer (if this vault is collateral)
+            if (collateral == address(this)) {
+                _transfer(violator, liquidator, collateralShares);
+            }
+        }
+
+        // Update cash
+        cash += repayAssets;
+
+        emit Liquidation(liquidator, violator, collateral, repayAssets, collateralShares);
+    }
+
+    // ========================================
     // EVENTS
     // ========================================
 
     event Borrow(address indexed account, uint256 assets);
     event Repay(address indexed account, uint256 assets);
+    event Liquidation(
+        address indexed liquidator,
+        address indexed violator,
+        address indexed collateral,
+        uint256 repayAssets,
+        uint256 collateralShares
+    );
 }

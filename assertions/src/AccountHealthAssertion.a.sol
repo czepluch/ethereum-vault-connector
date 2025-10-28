@@ -363,6 +363,7 @@ contract AccountHealthAssertion is Assertion {
     /// - transferFrom(address,address,uint256) - extracts from (1st param)
     /// - borrow(uint256,address) - extracts receiver (2nd param, the borrower)
     /// - repay(uint256,address) - extracts debtor (2nd param)
+    /// - liquidate(address,address,uint256,uint256) - extracts violator (1st param)
     ///
     /// Returns empty array if function signature is not recognized or has insufficient data.
     function extractAccountsFromCalldata(
@@ -422,6 +423,22 @@ contract AccountHealthAssertion is Assertion {
 
             accounts = new address[](1);
             accounts[0] = account;
+            return accounts;
+        }
+
+        // liquidate(address,address,uint256,uint256) - 0xc1342574
+        if (selector == 0xc1342574) {
+            // Need 4 (selector) + 32 (address violator) + remaining params = at least 68 bytes
+            if (data.length < 68) return new address[](0);
+
+            // Extract violator (1st parameter at offset 4)
+            address violator;
+            assembly {
+                violator := mload(add(data, 36)) // 4 + 32
+            }
+
+            accounts = new address[](1);
+            accounts[0] = violator;
             return accounts;
         }
 

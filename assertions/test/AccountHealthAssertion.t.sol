@@ -910,4 +910,229 @@ contract TestAccountHealthAssertion is CredibleTest, Test {
         vm.prank(user1);
         evc.batch(items);
     }
+
+    // ========================================
+    // LIQUIDATION TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Legal liquidation of unhealthy account - should pass
+    /// @dev Verifies that liquidating an unhealthy account passes the assertion
+    ///
+    /// TEST SETUP:
+    /// - User1 (violator) has 80e18 collateral in vault2, 90e18 debt in vault1 (unhealthy: 80 < 90)
+    /// - User2 (liquidator) liquidates user1
+    /// - Liquidation should pass because user1 was already unhealthy
+    ///
+    /// EXPECTED RESULT: Assertion should PASS (unhealthy accounts can be liquidated)
+    function testAccountHealth_Liquidate_UnhealthyViolator_Passes() public {
+        // Deploy MockEVault instances for this test
+        MockEVault debtVault = new MockEVault(asset, evc);
+        MockEVault collateralVault = new MockEVault(asset, evc);
+
+        // Mint tokens to user1
+        asset.mint(user1, 1000e18);
+
+        // Setup: Enable debtVault as controller and collateralVault as collateral for user1
+        vm.startPrank(user1);
+        evc.enableController(user1, address(debtVault));
+        evc.enableCollateral(user1, address(collateralVault));
+        asset.approve(address(collateralVault), type(uint256).max);
+        vm.stopPrank();
+
+        // Give user1 collateral (80e18)
+        vm.prank(user1);
+        evc.call(address(collateralVault), user1, 0, abi.encodeWithSelector(MockEVault.deposit.selector, 80e18, user1));
+
+        // Setup debtVault with assets for borrowing by having user2 deposit
+        asset.mint(user2, 1000e18);
+        vm.startPrank(user2);
+        asset.approve(address(debtVault), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user2);
+        evc.call(address(debtVault), user2, 0, abi.encodeWithSelector(MockEVault.deposit.selector, 1000e18, user2));
+
+        // User1 borrows 90e18 (becomes unhealthy: 80 collateral < 90 debt)
+        vm.prank(user1);
+        evc.call(address(debtVault), user1, 0, abi.encodeWithSelector(MockEVault.borrow.selector, 90e18, user1));
+
+        // Give user2 (liquidator) assets to perform liquidation
+        asset.mint(user2, 1000e18);
+        vm.prank(user2);
+        asset.approve(address(debtVault), type(uint256).max);
+
+        // Approve collateralVault to transfer user1's shares during liquidation
+        vm.prank(user1);
+        collateralVault.approve(address(debtVault), type(uint256).max);
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // Execute liquidation via EVC.call
+        // User2 liquidates user1: repays 50e18 debt, seizes collateral
+        vm.prank(user2);
+        evc.call(
+            address(debtVault),
+            user2,
+            0,
+            abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 50e18, 0)
+        );
+
+        // Assertion should pass - unhealthy accounts can be liquidated
+    }
+
+    /// @notice SCENARIO: Illegal liquidation of healthy account - should revert
+    /// @dev Verifies that liquidating a healthy account reverts the assertion
+    ///
+    /// TEST SETUP:
+    /// - User1 (violator) has 200e18 collateral in vault2, 50e18 debt in vault1 (healthy: 200 > 50)
+    /// - User2 (liquidator) attempts to liquidate user1
+    /// - Flag is set to break health invariant during liquidation
+    ///
+    /// EXPECTED RESULT: Assertion should REVERT (healthy accounts cannot be liquidated)
+    function testAccountHealth_Liquidate_HealthyViolator_Reverts() public {
+        // Deploy MockEVault instances for this test
+        MockEVault debtVault = new MockEVault(asset, evc);
+        MockEVault collateralVault = new MockEVault(asset, evc);
+
+        // Mint tokens to user1
+        asset.mint(user1, 1000e18);
+
+        // Setup: Enable debtVault as controller and collateralVault as collateral for user1
+        vm.startPrank(user1);
+        evc.enableController(user1, address(debtVault));
+        evc.enableCollateral(user1, address(collateralVault));
+        asset.approve(address(collateralVault), type(uint256).max);
+        vm.stopPrank();
+
+        // Give user1 lots of collateral (200e18)
+        vm.prank(user1);
+        evc.call(address(collateralVault), user1, 0, abi.encodeWithSelector(MockEVault.deposit.selector, 200e18, user1));
+
+        // Setup debtVault with assets for borrowing by having user2 deposit
+        asset.mint(user2, 1000e18);
+        vm.startPrank(user2);
+        asset.approve(address(debtVault), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user2);
+        evc.call(address(debtVault), user2, 0, abi.encodeWithSelector(MockEVault.deposit.selector, 1000e18, user2));
+
+        // User1 borrows 50e18 (healthy: 200 collateral > 50 debt)
+        vm.prank(user1);
+        evc.call(address(debtVault), user1, 0, abi.encodeWithSelector(MockEVault.borrow.selector, 50e18, user1));
+
+        // Give user2 (liquidator) assets to perform liquidation
+        asset.mint(user2, 1000e18);
+        vm.prank(user2);
+        asset.approve(address(debtVault), type(uint256).max);
+
+        // Approve collateralVault to transfer user1's shares during liquidation
+        vm.prank(user1);
+        collateralVault.approve(address(debtVault), type(uint256).max);
+
+        // Set flag to break health invariant (liquidate will add extra debt to violator)
+        debtVault.setLiquidateHealthyAccount(true);
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // Execute liquidation via EVC.call - should REVERT
+        // User2 attempts to liquidate healthy user1
+        vm.prank(user2);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.call(
+            address(debtVault),
+            user2,
+            0,
+            abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 30e18, 0)
+        );
+    }
+
+    /// @notice SCENARIO: Liquidator health maintained during liquidation - should pass
+    /// @dev Verifies that the liquidator's health is checked and maintained
+    ///
+    /// TEST SETUP:
+    /// - User1 (violator) is unhealthy
+    /// - User2 (liquidator) is healthy and performs liquidation
+    /// - Liquidation should maintain user2's health
+    ///
+    /// EXPECTED RESULT: Assertion should PASS (liquidator remains healthy)
+    function testAccountHealth_Liquidate_LiquidatorHealth_Passes() public {
+        // Deploy MockEVault instances for this test
+        MockEVault debtVault = new MockEVault(asset, evc);
+        MockEVault collateralVault = new MockEVault(asset, evc);
+
+        // Mint tokens to users
+        asset.mint(user1, 1000e18);
+        asset.mint(user2, 2000e18);
+
+        // Create a third user to provide liquidity (not involved in liquidation)
+        address liquidityProvider = address(0xDEAD);
+        asset.mint(liquidityProvider, 2000e18);
+
+        // Setup: Enable debtVault as controller for user1
+        vm.startPrank(user1);
+        evc.enableController(user1, address(debtVault));
+        evc.enableCollateral(user1, address(collateralVault));
+        asset.approve(address(collateralVault), type(uint256).max);
+        vm.stopPrank();
+
+        // User2 is liquidator - just needs assets, not a position
+        vm.prank(user2);
+        asset.approve(address(debtVault), type(uint256).max);
+
+        // Give user1 collateral (70e18)
+        vm.prank(user1);
+        evc.call(address(collateralVault), user1, 0, abi.encodeWithSelector(MockEVault.deposit.selector, 70e18, user1));
+
+        // Liquidity provider deposits to debtVault
+        vm.startPrank(liquidityProvider);
+        asset.approve(address(debtVault), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(liquidityProvider);
+        evc.call(
+            address(debtVault),
+            liquidityProvider,
+            0,
+            abi.encodeWithSelector(MockEVault.deposit.selector, 1000e18, liquidityProvider)
+        );
+
+        // User1 borrows 80e18 (unhealthy: 70 < 80)
+        vm.prank(user1);
+        evc.call(address(debtVault), user1, 0, abi.encodeWithSelector(MockEVault.borrow.selector, 80e18, user1));
+
+        // Approve debtVault for liquidation
+        vm.prank(user2);
+        asset.approve(address(debtVault), type(uint256).max);
+
+        // Approve collateralVault to transfer shares during liquidation
+        vm.prank(user1);
+        collateralVault.approve(address(debtVault), type(uint256).max);
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // Execute liquidation - user2 liquidates user1
+        // Should pass because user2 (liquidator) remains healthy
+        vm.prank(user2);
+        evc.call(
+            address(debtVault),
+            user2,
+            0,
+            abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 40e18, 0)
+        );
+
+        // Assertion should pass - liquidator remains healthy
+    }
 }
