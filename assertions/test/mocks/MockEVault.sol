@@ -195,7 +195,9 @@ contract MockEVault is ERC4626 {
     }
 
     /// @notice Get account balance - helper for controlCollateral testing
-    function getAccountBalance(address account) external view returns (uint256) {
+    function getAccountBalance(
+        address account
+    ) external view returns (uint256) {
         return balanceOf(account);
     }
 
@@ -205,11 +207,10 @@ contract MockEVault is ERC4626 {
 
     /// @notice Get account liquidity (collateral value vs liability value)
     /// @dev Used by AccountHealthAssertion tests
-    function accountLiquidity(address account, bool)
-        external
-        view
-        returns (uint256 collateralValue, uint256 liabilityValue)
-    {
+    function accountLiquidity(
+        address account,
+        bool
+    ) external view returns (uint256 collateralValue, uint256 liabilityValue) {
         // Get collaterals for the account from EVC
         address[] memory collaterals = evc.getCollaterals(account);
 
@@ -244,6 +245,20 @@ contract MockEVault is ERC4626 {
         emit Repay(account, assets);
 
         cash -= assets;
+    }
+
+    /// @notice Simulate bad debt socialization that causes rate decrease
+    /// @dev Used in VaultExchangeRateSpikeAssertion tests for >5% rate decrease scenarios
+    function simulateBadDebtSocialization(
+        uint256 lossAmount
+    ) external {
+        require(cash >= lossAmount, "Insufficient cash");
+
+        // Decrease cash (simulates loss of assets)
+        cash -= lossAmount;
+
+        // Emit DebtSocialized event to indicate legitimate rate decrease
+        emit DebtSocialized(msg.sender, lossAmount);
     }
 
     // ========================================

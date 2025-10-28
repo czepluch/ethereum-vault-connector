@@ -39,7 +39,7 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 /// While allowing legitimate scenarios:
 /// - Normal interest accrual (gradual rate increases)
 /// - Small rate fluctuations from deposits/withdrawals
-/// - skim() operations (explicitly exempted - claim unaccounted assets)
+/// - Debt socialization (sudden decreases when bad debt is socialized)
 ///
 /// Note: This complements VaultSharePriceAssertion (#1):
 /// - VaultSharePriceAssertion: Prevents decreases (except bad debt)
@@ -48,22 +48,12 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
     /// @notice Maximum allowed exchange rate change in basis points (5% = 500 bps)
     uint256 constant THRESHOLD_BPS = 500;
 
-    /// @notice skim() function selector for exemption checking
-    bytes4 constant SKIM_SELECTOR = bytes4(keccak256("skim(uint256,address)"));
-
     /// @notice Specifies which EVC functions this assertion should intercept
     /// @dev Registers triggers for batch, call, and controlCollateral operations
     function triggers() external view override {
-        registerCallTrigger(
-            this.assertionBatchExchangeRateSpike.selector, IEVC.batch.selector
-        );
-        registerCallTrigger(
-            this.assertionCallExchangeRateSpike.selector, IEVC.call.selector
-        );
-        registerCallTrigger(
-            this.assertionControlCollateralExchangeRateSpike.selector,
-            IEVC.controlCollateral.selector
-        );
+        registerCallTrigger(this.assertionBatchExchangeRateSpike.selector, IEVC.batch.selector);
+        registerCallTrigger(this.assertionCallExchangeRateSpike.selector, IEVC.call.selector);
+        registerCallTrigger(this.assertionControlCollateralExchangeRateSpike.selector, IEVC.controlCollateral.selector);
     }
 
     /// @notice Monitors EVC.batch() calls to validate exchange rate changes for all vaults in the batch
@@ -124,8 +114,7 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
         PhEvm.CallInputs[] memory callInputs = ph.getCallInputs(address(evc), IEVC.call.selector);
 
         for (uint256 i = 0; i < callInputs.length; i++) {
-            (address targetContract,,,,) =
-                abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
+            (address targetContract,,,,) = abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
 
             if (targetContract.code.length == 0) continue;
             validateVaultExchangeRateSpike(targetContract);
@@ -136,11 +125,11 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
     /// @dev Extracts the target collateral from controlCollateral parameters and validates rate
     function assertionControlCollateralExchangeRateSpike() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
-        PhEvm.CallInputs[] memory controlInputs =
-            ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
+        PhEvm.CallInputs[] memory controlInputs = ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
 
         for (uint256 i = 0; i < controlInputs.length; i++) {
-            // controlCollateral signature: (address targetCollateral, address onBehalfOfAccount, uint256 value, bytes data)
+            // controlCollateral signature: (address targetCollateral, address onBehalfOfAccount, uint256 value, bytes
+            // data)
             (address targetCollateral,,,) = abi.decode(controlInputs[i].input, (address, address, uint256, bytes));
 
             if (targetCollateral.code.length == 0) continue;
@@ -150,15 +139,13 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
 
     /// @notice Validates that a vault's exchange rate hasn't spiked beyond the threshold
     /// @dev Compares pre/post exchange rates and ensures change is within 5%
+    ///      Allows sudden decreases when debt socialization occurs
     /// @param vault The vault address to validate exchange rate for
-    function validateVaultExchangeRateSpike(address vault) internal {
+    function validateVaultExchangeRateSpike(
+        address vault
+    ) internal {
         // Skip zero address
         if (vault == address(0)) return;
-
-        // Skip skim() operations - they legitimately change rate by claiming unaccounted assets
-        if (isSkimOperation(vault)) {
-            return;
-        }
 
         // Get pre-transaction exchange rate
         ph.forkPreTx();
@@ -172,18 +159,27 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
 
         // Calculate absolute percentage change in basis points
         uint256 changeBps;
+        bool isDecrease = false;
         if (ratePost >= ratePre) {
             // Rate increased
             changeBps = ((ratePost - ratePre) * 10000) / ratePre;
         } else {
             // Rate decreased
             changeBps = ((ratePre - ratePost) * 10000) / ratePre;
+            isDecrease = true;
         }
 
-        require(
-            changeBps <= THRESHOLD_BPS,
-            "VaultExchangeRateSpikeAssertion: Exchange rate spike detected"
-        );
+        // If rate decreased >5%, check if it's due to debt socialization
+        if (isDecrease && changeBps > THRESHOLD_BPS) {
+            bool hasDebtSocialization = checkForBadDebtSocialization(vault);
+            require(
+                hasDebtSocialization,
+                "VaultExchangeRateSpikeAssertion: Exchange rate decreased >5% without debt socialization"
+            );
+        } else {
+            // For increases or small decreases, enforce the threshold
+            require(changeBps <= THRESHOLD_BPS, "VaultExchangeRateSpikeAssertion: Exchange rate spike detected");
+        }
     }
 
     /// @notice Gets the exchange rate for a vault (assets per share, scaled by 1e18)
@@ -191,7 +187,9 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
     /// @param vault The vault address to query
     /// @return rate The exchange rate scaled by 1e18
     /// @return valid Whether the rate is valid (false if totalSupply is 0)
-    function getExchangeRate(address vault) internal view returns (uint256 rate, bool valid) {
+    function getExchangeRate(
+        address vault
+    ) internal view returns (uint256 rate, bool valid) {
         try IERC4626(vault).totalAssets() returns (uint256 totalAssets) {
             try IERC4626(vault).totalSupply() returns (uint256 totalSupply) {
                 // Empty vault - skip
@@ -212,13 +210,36 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
         }
     }
 
-    /// @notice Checks if the transaction includes a skim() operation on the vault
-    /// @dev skim() operations are exempted because they legitimately change the rate
+    /// @notice Checks if bad debt socialization occurred for a vault
     /// @param vault The vault address to check
-    /// @return True if any call to this vault is skim()
-    function isSkimOperation(address vault) internal view returns (bool) {
-        // Check all call inputs to this vault for skim selector
-        PhEvm.CallInputs[] memory calls = ph.getCallInputs(vault, SKIM_SELECTOR);
-        return calls.length > 0;
+    /// @return hasBadDebt True if bad debt socialization was detected via DebtSocialized event
+    ///
+    /// BAD DEBT SOCIALIZATION DETECTION:
+    /// Checks for the DebtSocialized event which indicates that bad debt was socialized among depositors.
+    /// This is a legitimate reason for the exchange rate to suddenly decrease.
+    function checkForBadDebtSocialization(
+        address vault
+    ) internal returns (bool hasBadDebt) {
+        // Get all logs from the transaction
+        PhEvm.Log[] memory logs = ph.getLogs();
+
+        // Check each log for DebtSocialized event from this vault
+        for (uint256 i = 0; i < logs.length; i++) {
+            PhEvm.Log memory log = logs[i];
+
+            // Check if this log is from our vault
+            if (log.emitter == vault) {
+                // Check for DebtSocialized event (topic[0] = event signature)
+                // DebtSocialized event signature: keccak256("DebtSocialized(address,uint256)")
+                if (log.topics.length >= 1) {
+                    bytes32 debtSocializedEventSig = keccak256("DebtSocialized(address,uint256)");
+                    if (log.topics[0] == debtSocializedEventSig) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 }

@@ -14,10 +14,13 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 /// ACCOUNT EXTRACTION STRATEGY:
 /// Uses a hybrid approach to identify affected accounts:
 /// 1. Extracts the onBehalfOfAccount from EVC calls (batch, call, controlCollateral)
-/// 2. Parses vault function call data to extract additional accounts from parameters
-///    (e.g., receiver in deposit, from/to in transfer)
-/// This ensures complete coverage of all potentially affected accounts, including those
-/// affected by single-parameter functions like withdraw(uint256) or deposit(uint256).
+/// 2. Parses vault function call data to extract additional accounts from parameters:
+///    - withdraw(uint256,address,address) → owner (3rd param)
+///    - redeem(uint256,address,address) → owner (3rd param)
+///    - transferFrom(address,address,uint256) → from (1st param)
+///    - borrow(uint256,address) → receiver (2nd param)
+///    - repay(uint256,address) → debtor (2nd param)
+/// This ensures complete coverage of all potentially affected accounts.
 ///
 /// @custom:invariant ACCOUNT_HEALTH_INVARIANT
 /// For any account A, any vault V, and any transaction T that interacts with V:
@@ -61,9 +64,7 @@ contract AccountHealthAssertion is Assertion {
         // Register triggers for each call type
         registerCallTrigger(this.assertionBatchAccountHealth.selector, IEVC.batch.selector);
         registerCallTrigger(this.assertionCallAccountHealth.selector, IEVC.call.selector);
-        registerCallTrigger(
-            this.assertionControlCollateralAccountHealth.selector, IEVC.controlCollateral.selector
-        );
+        registerCallTrigger(this.assertionControlCollateralAccountHealth.selector, IEVC.controlCollateral.selector);
     }
 
     /// @notice Assertion for batch operations
@@ -85,9 +86,9 @@ contract AccountHealthAssertion is Assertion {
     ///
     /// ACCOUNT IDENTIFICATION:
     /// - Checks onBehalfOfAccount (the authenticated account for the operation)
-    /// - This covers the vast majority of cases where health changes through user's own actions
-    /// - Does not check secondary affected accounts (e.g., transfer recipients, deposit receivers)
-    /// - Future: Can add specific function signature checks if needed for comprehensive coverage
+    /// - Extracts additional accounts from function parameters (withdraw owner, transferFrom sender, borrow receiver,
+    /// repay debtor)
+    /// - This provides comprehensive coverage of accounts whose health may be affected by vault operations
     ///
     /// ACCOUNT HEALTH CHECK:
     /// - Uses controller vault's checkAccountStatus() if available
@@ -109,25 +110,47 @@ contract AccountHealthAssertion is Assertion {
                 // Skip non-contract addresses
                 if (items[j].targetContract.code.length == 0) continue;
 
-                address account = items[j].onBehalfOfAccount;
-                if (account == address(0)) continue;
+                // Extract accounts affected by this operation
+                // 1. onBehalfOfAccount (the authenticated account)
+                // 2. Accounts extracted from function parameters (owner, from, receiver, debtor, etc.)
+                address[] memory extractedAccounts = extractAccountsFromCalldata(items[j].data);
 
-                // Check 1: Validate health at the touched vault
-                validateAccountHealthInvariant(items[j].targetContract, account);
+                // Build list of all accounts to check (onBehalfOfAccount + extracted accounts)
+                uint256 accountCount = (items[j].onBehalfOfAccount != address(0) ? 1 : 0) + extractedAccounts.length;
+                address[] memory accountsToCheck = new address[](accountCount);
+                uint256 idx = 0;
 
-                // Check 2: Validate health at controller vaults for this account
-                // This catches cross-vault health impacts (e.g., withdrawing collateral from vault A
-                // affects health as seen by controller vault B)
-                address[] memory controllers = evc.getControllers(account);
+                if (items[j].onBehalfOfAccount != address(0)) {
+                    accountsToCheck[idx++] = items[j].onBehalfOfAccount;
+                }
 
-                for (uint256 k = 0; k < controllers.length; k++) {
-                    address controller = controllers[k];
-                    if (controller.code.length == 0) continue;
+                for (uint256 m = 0; m < extractedAccounts.length; m++) {
+                    if (extractedAccounts[m] != address(0)) {
+                        accountsToCheck[idx++] = extractedAccounts[m];
+                    }
+                }
 
-                    // Validate health at controller vault
-                    // Note: This may redundantly check the same controller multiple times if the same
-                    // account appears in multiple batch items
-                    validateAccountHealthInvariant(controller, account);
+                // Validate health for all affected accounts
+                for (uint256 n = 0; n < idx; n++) {
+                    address account = accountsToCheck[n];
+
+                    // Check 1: Validate health at the touched vault
+                    validateAccountHealthInvariant(items[j].targetContract, account);
+
+                    // Check 2: Validate health at controller vaults for this account
+                    // This catches cross-vault health impacts (e.g., withdrawing collateral from vault A
+                    // affects health as seen by controller vault B)
+                    address[] memory controllers = evc.getControllers(account);
+
+                    for (uint256 k = 0; k < controllers.length; k++) {
+                        address controller = controllers[k];
+                        if (controller.code.length == 0) continue;
+
+                        // Validate health at controller vault
+                        // Note: This may redundantly check the same controller multiple times if the same
+                        // account appears in multiple batch items
+                        validateAccountHealthInvariant(controller, account);
+                    }
                 }
             }
         }
@@ -153,24 +176,46 @@ contract AccountHealthAssertion is Assertion {
         for (uint256 i = 0; i < singleCalls.length; i++) {
             // Decode call parameters directly: (address targetContract, address onBehalfOfAccount, uint256 value, bytes
             // data)
-            (address targetContract, address onBehalfOfAccount,,) =
+            (address targetContract, address onBehalfOfAccount,, bytes memory data) =
                 abi.decode(singleCalls[i].input, (address, address, uint256, bytes));
 
             // Skip non-contract addresses
             if (targetContract.code.length == 0) continue;
-            if (onBehalfOfAccount == address(0)) continue;
 
-            // Check 1: Validate health at the touched vault
-            validateAccountHealthInvariant(targetContract, onBehalfOfAccount);
+            // Extract accounts affected by this operation
+            address[] memory extractedAccounts = extractAccountsFromCalldata(data);
 
-            // Check 2: Validate health at controller vaults
-            address[] memory controllers = evc.getControllers(onBehalfOfAccount);
+            // Build list of all accounts to check
+            uint256 accountCount = (onBehalfOfAccount != address(0) ? 1 : 0) + extractedAccounts.length;
+            address[] memory accountsToCheck = new address[](accountCount);
+            uint256 idx = 0;
 
-            for (uint256 k = 0; k < controllers.length; k++) {
-                address controller = controllers[k];
-                if (controller.code.length == 0) continue;
+            if (onBehalfOfAccount != address(0)) {
+                accountsToCheck[idx++] = onBehalfOfAccount;
+            }
 
-                validateAccountHealthInvariant(controller, onBehalfOfAccount);
+            for (uint256 m = 0; m < extractedAccounts.length; m++) {
+                if (extractedAccounts[m] != address(0)) {
+                    accountsToCheck[idx++] = extractedAccounts[m];
+                }
+            }
+
+            // Validate health for all affected accounts
+            for (uint256 n = 0; n < idx; n++) {
+                address account = accountsToCheck[n];
+
+                // Check 1: Validate health at the touched vault
+                validateAccountHealthInvariant(targetContract, account);
+
+                // Check 2: Validate health at controller vaults
+                address[] memory controllers = evc.getControllers(account);
+
+                for (uint256 k = 0; k < controllers.length; k++) {
+                    address controller = controllers[k];
+                    if (controller.code.length == 0) continue;
+
+                    validateAccountHealthInvariant(controller, account);
+                }
             }
         }
     }
@@ -195,24 +240,46 @@ contract AccountHealthAssertion is Assertion {
         for (uint256 i = 0; i < controlCalls.length; i++) {
             // Decode control collateral parameters directly: (address targetCollateral, address onBehalfOfAccount,
             // uint256 value, bytes data)
-            (address targetCollateral, address onBehalfOfAccount,,) =
+            (address targetCollateral, address onBehalfOfAccount,, bytes memory data) =
                 abi.decode(controlCalls[i].input, (address, address, uint256, bytes));
 
             // Skip non-contract addresses
             if (targetCollateral.code.length == 0) continue;
-            if (onBehalfOfAccount == address(0)) continue;
 
-            // Check 1: Validate health at the collateral vault
-            validateAccountHealthInvariant(targetCollateral, onBehalfOfAccount);
+            // Extract accounts affected by this operation
+            address[] memory extractedAccounts = extractAccountsFromCalldata(data);
 
-            // Check 2: Validate health at controller vaults
-            address[] memory controllers = evc.getControllers(onBehalfOfAccount);
+            // Build list of all accounts to check
+            uint256 accountCount = (onBehalfOfAccount != address(0) ? 1 : 0) + extractedAccounts.length;
+            address[] memory accountsToCheck = new address[](accountCount);
+            uint256 idx = 0;
 
-            for (uint256 k = 0; k < controllers.length; k++) {
-                address controller = controllers[k];
-                if (controller.code.length == 0) continue;
+            if (onBehalfOfAccount != address(0)) {
+                accountsToCheck[idx++] = onBehalfOfAccount;
+            }
 
-                validateAccountHealthInvariant(controller, onBehalfOfAccount);
+            for (uint256 m = 0; m < extractedAccounts.length; m++) {
+                if (extractedAccounts[m] != address(0)) {
+                    accountsToCheck[idx++] = extractedAccounts[m];
+                }
+            }
+
+            // Validate health for all affected accounts
+            for (uint256 n = 0; n < idx; n++) {
+                address account = accountsToCheck[n];
+
+                // Check 1: Validate health at the collateral vault
+                validateAccountHealthInvariant(targetCollateral, account);
+
+                // Check 2: Validate health at controller vaults
+                address[] memory controllers = evc.getControllers(account);
+
+                for (uint256 k = 0; k < controllers.length; k++) {
+                    address controller = controllers[k];
+                    if (controller.code.length == 0) continue;
+
+                    validateAccountHealthInvariant(controller, account);
+                }
             }
         }
     }
@@ -283,6 +350,83 @@ contract AccountHealthAssertion is Assertion {
             // If checkAccountStatus reverts, account is unhealthy
             return false;
         }
+    }
+
+    /// @notice Extracts affected accounts from vault function call data
+    /// @param data The calldata for the vault function
+    /// @return accounts Array of addresses that may be affected by this call
+    ///
+    /// PARAMETER EXTRACTION STRATEGY:
+    /// Parses function signatures to extract accounts whose health may be affected:
+    /// - withdraw(uint256,address,address) - extracts owner (3rd param)
+    /// - redeem(uint256,address,address) - extracts owner (3rd param)
+    /// - transferFrom(address,address,uint256) - extracts from (1st param)
+    /// - borrow(uint256,address) - extracts receiver (2nd param, the borrower)
+    /// - repay(uint256,address) - extracts debtor (2nd param)
+    ///
+    /// Returns empty array if function signature is not recognized or has insufficient data.
+    function extractAccountsFromCalldata(
+        bytes memory data
+    ) internal pure returns (address[] memory accounts) {
+        // Need at least 4 bytes for selector
+        if (data.length < 4) {
+            return new address[](0);
+        }
+
+        bytes4 selector = bytes4(data[0]) | (bytes4(data[1]) >> 8) | (bytes4(data[2]) >> 16) | (bytes4(data[3]) >> 24);
+
+        // withdraw(uint256,address,address) - 0xb460af94
+        // redeem(uint256,address,address) - 0xba087652
+        if (selector == 0xb460af94 || selector == 0xba087652) {
+            // Need 4 (selector) + 32 (uint256) + 32 (address) + 32 (address) = 100 bytes
+            if (data.length < 100) return new address[](0);
+
+            // Extract owner (3rd parameter at offset 68)
+            address owner;
+            assembly {
+                owner := mload(add(data, 100)) // 4 + 32 + 32 + 32
+            }
+
+            accounts = new address[](1);
+            accounts[0] = owner;
+            return accounts;
+        }
+
+        // transferFrom(address,address,uint256) - 0x23b872dd
+        if (selector == 0x23b872dd) {
+            // Need 4 (selector) + 32 (address) + 32 (address) + 32 (uint256) = 100 bytes
+            if (data.length < 100) return new address[](0);
+
+            // Extract from (1st parameter at offset 4)
+            address from;
+            assembly {
+                from := mload(add(data, 36)) // 4 + 32
+            }
+
+            accounts = new address[](1);
+            accounts[0] = from;
+            return accounts;
+        }
+
+        // borrow(uint256,address) - 0xc5ebeaec
+        // repay(uint256,address) - 0x371fd8e6
+        if (selector == 0xc5ebeaec || selector == 0x371fd8e6) {
+            // Need 4 (selector) + 32 (uint256) + 32 (address) = 68 bytes
+            if (data.length < 68) return new address[](0);
+
+            // Extract receiver/debtor (2nd parameter at offset 36)
+            address account;
+            assembly {
+                account := mload(add(data, 68)) // 4 + 32 + 32
+            }
+
+            accounts = new address[](1);
+            accounts[0] = account;
+            return accounts;
+        }
+
+        // Function not recognized or no extractable accounts
+        return new address[](0);
     }
 }
 

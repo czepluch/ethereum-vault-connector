@@ -283,24 +283,22 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
         // Execute controlCollateral - just share transfer, no rate change
         vm.prank(address(vault1));
         evc.controlCollateral(
-            address(vault2),
-            user1,
-            0,
-            abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18)
+            address(vault2), user1, 0, abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18)
         );
 
         // Assertion passes: no rate change
     }
 
-    /// @notice SCENARIO: skim() operation exempted
-    /// @dev skim() legitimately changes rate, should be exempted
-    function testExchangeRateSpike_Batch_SkimExempted_Passes() public {
+    /// @notice SCENARIO: skim() operation passes with small rate change
+    /// @dev skim() mints proportional shares, so rate change should be minimal (within 5%)
+    ///      This test verifies skim doesn't cause rate spikes even though it's not exempted
+    function testExchangeRateSpike_Batch_SkimSmallRateChange_Passes() public {
         // Setup: Initial deposit
         vm.prank(user1);
         evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 1000e18, user1));
 
         // Create unaccounted assets (donation)
-        asset.mint(address(vault1), 500e18); // 50% increase in assets!
+        asset.mint(address(vault1), 100e18); // 10% more assets
 
         // Register assertion
         cl.assertion({
@@ -314,13 +312,41 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockEVault.skim.selector, 500e18, user1);
+        items[0].data = abi.encodeWithSelector(MockEVault.skim.selector, 100e18, user1);
 
-        // Execute batch call
+        // Execute batch call - should pass because skim mints proportional shares
+        // The rate change is minimal due to share minting mechanism
+        vm.prank(user1);
+        evc.batch(items);
+    }
+
+    /// @notice SCENARIO: Rate decrease >5% due to debt socialization
+    /// @dev Debt socialization legitimizes large rate decreases
+    function testExchangeRateSpike_Batch_DebtSocializationDecrease_Passes() public {
+        // Setup: Create initial deposit to establish exchange rate
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 1000e18, user1));
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
+        });
+
+        // Create batch: simulate bad debt socialization causing >5% rate decrease
+        // This simulates a loss of 100e18 (10% of cash), which causes rate to drop >5%
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(vault1);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockEVault.simulateBadDebtSocialization.selector, 100e18);
+
+        // Execute batch - should pass because DebtSocialized event is emitted
         vm.prank(user1);
         evc.batch(items);
 
-        // Assertion passes: skim() is exempted even though rate changed >5%
+        // Assertion passes: debt socialization allows rate decrease >5%
     }
 
     // ========================================
@@ -351,7 +377,7 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
-        // Execute batch call - should fail
+        // Execute batch call - should fail (rate increase >5%)
         vm.prank(user1);
         vm.expectRevert("VaultExchangeRateSpikeAssertion: Exchange rate spike detected");
         evc.batch(items);
@@ -381,9 +407,9 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
-        // Execute batch call - should fail
+        // Execute batch call - should fail with decrease-specific error
         vm.prank(user1);
-        vm.expectRevert("VaultExchangeRateSpikeAssertion: Exchange rate spike detected");
+        vm.expectRevert("VaultExchangeRateSpikeAssertion: Exchange rate decreased >5% without debt socialization");
         evc.batch(items);
     }
 

@@ -10,6 +10,7 @@ import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 // Import shared mocks
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockVault} from "./mocks/MockVault.sol";
+import {MockEVault} from "./mocks/MockEVault.sol";
 
 /// @title TestAccountHealthAssertion
 /// @notice Comprehensive test suite for the AccountHealthAssertion assertion
@@ -26,6 +27,7 @@ contract TestAccountHealthAssertion is CredibleTest, Test {
     // Test tokens
     MockERC20 public token1;
     MockERC20 public token2;
+    MockERC20 public asset; // Asset for MockEVault tests
 
     // Test users
     address public user1 = address(0xBEEF);
@@ -41,6 +43,7 @@ contract TestAccountHealthAssertion is CredibleTest, Test {
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
         token2 = new MockERC20("Test Token 2", "TT2");
+        asset = new MockERC20("Test Asset", "TA");
 
         // Deploy test vaults
         vault1 = new MockVault(address(evc), address(token1));
@@ -824,6 +827,86 @@ contract TestAccountHealthAssertion is CredibleTest, Test {
         });
 
         // Execute batch call - should PASS because health improves (90+20=110 >= 80)
+        vm.prank(user1);
+        evc.batch(items);
+    }
+
+    // ========================================
+    // PARAMETER EXTRACTION TESTS
+    // ========================================
+    // Tests to verify that the assertion correctly extracts accounts from function parameters
+    // Note: These tests verify that parameter extraction doesn't cause compilation/runtime errors
+    // More comprehensive health check tests would require vaults that implement IVault interface
+
+    /// @notice SCENARIO: Parameter extraction for borrow(uint256,address)
+    /// @dev Verifies that the assertion extracts the receiver parameter (2nd param)
+    function testAccountHealth_ParameterExtraction_Borrow() public {
+        // Setup: Enable vault1 as controller for user1, give user1 collateral
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // Give user1 collateral in vault2
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        // Setup vault1 with assets for borrowing
+        token1.mint(address(vault1), 1000e18);
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create batch: borrow with receiver=user2 (should extract user2 from 2nd parameter)
+        // The assertion should check health for BOTH user1 (onBehalfOfAccount) AND user2 (receiver)
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(vault1);
+        items[0].onBehalfOfAccount = user1; // onBehalfOfAccount is user1 (borrower account)
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user2); // receiver is user2
+
+        // Execute batch - assertion should extract and check both accounts
+        vm.prank(user1);
+        evc.batch(items);
+    }
+
+    /// @notice SCENARIO: Parameter extraction for repay(uint256,address)
+    /// @dev Verifies that the assertion extracts the debtor parameter (2nd param)
+    function testAccountHealth_ParameterExtraction_Repay() public {
+        // Setup: Enable vault1 as controller for user2
+        vm.startPrank(user2);
+        evc.enableController(user2, address(vault1));
+        evc.enableCollateral(user2, address(vault2));
+        vm.stopPrank();
+
+        // Give user2 collateral
+        vm.prank(user2);
+        evc.call(address(vault2), user2, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user2));
+
+        // Setup vault1 with assets and create a borrow for user2
+        token1.mint(address(vault1), 1000e18);
+        vm.prank(user2);
+        evc.call(address(vault1), user2, 0, abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user2));
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create batch: repay with debtor=user2 (should extract user2 from 2nd parameter)
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(vault1);
+        items[0].onBehalfOfAccount = user1; // onBehalfOfAccount is user1 (payer)
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockVault.repay.selector, 10e18, user2); // debtor is user2
+
+        // Execute batch - assertion should extract and check both accounts
         vm.prank(user1);
         evc.batch(items);
     }
