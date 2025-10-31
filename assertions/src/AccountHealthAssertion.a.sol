@@ -20,6 +20,7 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 ///    - transferFrom(address,address,uint256) → from (1st param)
 ///    - borrow(uint256,address) → receiver (2nd param)
 ///    - repay(uint256,address) → debtor (2nd param)
+///    - liquidate(address,address,uint256,uint256) → violator (1st param)
 /// This ensures complete coverage of all potentially affected accounts.
 ///
 /// @custom:invariant ACCOUNT_HEALTH_INVARIANT
@@ -86,14 +87,20 @@ contract AccountHealthAssertion is Assertion {
     ///
     /// ACCOUNT IDENTIFICATION:
     /// - Checks onBehalfOfAccount (the authenticated account for the operation)
-    /// - Extracts additional accounts from function parameters (withdraw owner, transferFrom sender, borrow receiver,
-    /// repay debtor)
+    /// - Extracts additional accounts from function parameters (withdraw owner, redeem owner, transferFrom sender,
+    /// borrow receiver, repay debtor, liquidate violator)
     /// - This provides comprehensive coverage of accounts whose health may be affected by vault operations
     ///
     /// ACCOUNT HEALTH CHECK:
     /// - Uses controller vault's checkAccountStatus() if available
     /// - Falls back to accountLiquidity() comparison (collateralValue >= liabilityValue)
     /// - Skips accounts that were already unhealthy before the transaction
+    ///
+    /// OPTIMIZATION: Account Deduplication
+    /// Instead of validating each account multiple times (once per batch item), we:
+    /// 1. Collect all unique accounts from ALL batch items first
+    /// 2. Validate each unique account only once
+    /// This eliminates redundant evc.getControllers() calls and health checks
     function assertionBatchAccountHealth() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
@@ -105,52 +112,87 @@ contract AccountHealthAssertion is Assertion {
             // Decode batch call parameters directly: (BatchItem[] items)
             IEVC.BatchItem[] memory items = abi.decode(batchCalls[i].input, (IEVC.BatchItem[]));
 
-            // Process all vaults in this batch call
+            // PHASE 1: Collect all unique accounts across all batch items
+            // We use a simple array + linear search since batch sizes are typically small (< 10 items)
+            // For larger batches, this is still better than redundant health checks
+            address[] memory uniqueAccounts = new address[](items.length * 2); // Max 2 accounts per item
+            uint256 uniqueCount = 0;
+
             for (uint256 j = 0; j < items.length; j++) {
                 // Skip non-contract addresses
                 if (items[j].targetContract.code.length == 0) continue;
 
                 // Extract accounts affected by this operation
-                // 1. onBehalfOfAccount (the authenticated account)
-                // 2. Accounts extracted from function parameters (owner, from, receiver, debtor, etc.)
                 address[] memory extractedAccounts = extractAccountsFromCalldata(items[j].data);
 
-                // Build list of all accounts to check (onBehalfOfAccount + extracted accounts)
-                uint256 accountCount = (items[j].onBehalfOfAccount != address(0) ? 1 : 0) + extractedAccounts.length;
-                address[] memory accountsToCheck = new address[](accountCount);
-                uint256 idx = 0;
-
+                // Add onBehalfOfAccount if present and unique
                 if (items[j].onBehalfOfAccount != address(0)) {
-                    accountsToCheck[idx++] = items[j].onBehalfOfAccount;
+                    bool found = false;
+                    for (uint256 k = 0; k < uniqueCount; k++) {
+                        if (uniqueAccounts[k] == items[j].onBehalfOfAccount) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        uniqueAccounts[uniqueCount++] = items[j].onBehalfOfAccount;
+                    }
                 }
 
+                // Add extracted accounts if unique
                 for (uint256 m = 0; m < extractedAccounts.length; m++) {
-                    if (extractedAccounts[m] != address(0)) {
-                        accountsToCheck[idx++] = extractedAccounts[m];
+                    if (extractedAccounts[m] == address(0)) continue;
+
+                    bool found = false;
+                    for (uint256 k = 0; k < uniqueCount; k++) {
+                        if (uniqueAccounts[k] == extractedAccounts[m]) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        uniqueAccounts[uniqueCount++] = extractedAccounts[m];
                     }
                 }
+            }
 
-                // Validate health for all affected accounts
-                for (uint256 n = 0; n < idx; n++) {
-                    address account = accountsToCheck[n];
+            // PHASE 2: Validate each unique account once at all touched vaults + controllers
+            // We still need to check each touched vault, so collect unique vaults too
+            address[] memory uniqueVaults = new address[](items.length);
+            uint256 vaultCount = 0;
 
-                    // Check 1: Validate health at the touched vault
-                    validateAccountHealthInvariant(items[j].targetContract, account);
+            for (uint256 j = 0; j < items.length; j++) {
+                if (items[j].targetContract.code.length == 0) continue;
 
-                    // Check 2: Validate health at controller vaults for this account
-                    // This catches cross-vault health impacts (e.g., withdrawing collateral from vault A
-                    // affects health as seen by controller vault B)
-                    address[] memory controllers = evc.getControllers(account);
-
-                    for (uint256 k = 0; k < controllers.length; k++) {
-                        address controller = controllers[k];
-                        if (controller.code.length == 0) continue;
-
-                        // Validate health at controller vault
-                        // Note: This may redundantly check the same controller multiple times if the same
-                        // account appears in multiple batch items
-                        validateAccountHealthInvariant(controller, account);
+                bool found = false;
+                for (uint256 k = 0; k < vaultCount; k++) {
+                    if (uniqueVaults[k] == items[j].targetContract) {
+                        found = true;
+                        break;
                     }
+                }
+                if (!found) {
+                    uniqueVaults[vaultCount++] = items[j].targetContract;
+                }
+            }
+
+            // PHASE 3: Validate each unique account at each touched vault and all controllers
+            for (uint256 n = 0; n < uniqueCount; n++) {
+                address account = uniqueAccounts[n];
+
+                // Check health at all touched vaults
+                for (uint256 v = 0; v < vaultCount; v++) {
+                    validateAccountHealthInvariant(uniqueVaults[v], account);
+                }
+
+                // Check health at all controller vaults for this account
+                address[] memory controllers = evc.getControllers(account);
+
+                for (uint256 k = 0; k < controllers.length; k++) {
+                    address controller = controllers[k];
+                    if (controller.code.length == 0) continue;
+
+                    validateAccountHealthInvariant(controller, account);
                 }
             }
         }
@@ -166,56 +208,92 @@ contract AccountHealthAssertion is Assertion {
     /// 4. Reverts if a healthy account becomes unhealthy
     ///
     /// NOTE: This covers the "call through EVC" pattern mentioned in the Euler whitepaper
+    ///
+    /// OPTIMIZATION: Account Deduplication
+    /// Collects all unique accounts across all single calls before validation
     function assertionCallAccountHealth() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all single calls to analyze
         PhEvm.CallInputs[] memory singleCalls = ph.getCallInputs(address(evc), IEVC.call.selector);
 
-        // Process all single calls to ensure complete coverage
+        // PHASE 1: Collect all unique accounts across all single calls
+        address[] memory uniqueAccounts = new address[](singleCalls.length * 2); // Max 2 accounts per call
+        uint256 uniqueCount = 0;
+        address[] memory uniqueVaults = new address[](singleCalls.length);
+        uint256 vaultCount = 0;
+
         for (uint256 i = 0; i < singleCalls.length; i++) {
-            // Decode call parameters directly: (address targetContract, address onBehalfOfAccount, uint256 value, bytes
-            // data)
+            // Decode call parameters
             (address targetContract, address onBehalfOfAccount,, bytes memory data) =
                 abi.decode(singleCalls[i].input, (address, address, uint256, bytes));
 
             // Skip non-contract addresses
             if (targetContract.code.length == 0) continue;
 
-            // Extract accounts affected by this operation
+            // Collect unique vault
+            bool vaultFound = false;
+            for (uint256 v = 0; v < vaultCount; v++) {
+                if (uniqueVaults[v] == targetContract) {
+                    vaultFound = true;
+                    break;
+                }
+            }
+            if (!vaultFound) {
+                uniqueVaults[vaultCount++] = targetContract;
+            }
+
+            // Extract and collect unique accounts
             address[] memory extractedAccounts = extractAccountsFromCalldata(data);
 
-            // Build list of all accounts to check
-            uint256 accountCount = (onBehalfOfAccount != address(0) ? 1 : 0) + extractedAccounts.length;
-            address[] memory accountsToCheck = new address[](accountCount);
-            uint256 idx = 0;
-
+            // Add onBehalfOfAccount if unique
             if (onBehalfOfAccount != address(0)) {
-                accountsToCheck[idx++] = onBehalfOfAccount;
+                bool found = false;
+                for (uint256 k = 0; k < uniqueCount; k++) {
+                    if (uniqueAccounts[k] == onBehalfOfAccount) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    uniqueAccounts[uniqueCount++] = onBehalfOfAccount;
+                }
             }
 
+            // Add extracted accounts if unique
             for (uint256 m = 0; m < extractedAccounts.length; m++) {
-                if (extractedAccounts[m] != address(0)) {
-                    accountsToCheck[idx++] = extractedAccounts[m];
+                if (extractedAccounts[m] == address(0)) continue;
+
+                bool found = false;
+                for (uint256 k = 0; k < uniqueCount; k++) {
+                    if (uniqueAccounts[k] == extractedAccounts[m]) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    uniqueAccounts[uniqueCount++] = extractedAccounts[m];
                 }
             }
+        }
 
-            // Validate health for all affected accounts
-            for (uint256 n = 0; n < idx; n++) {
-                address account = accountsToCheck[n];
+        // PHASE 2: Validate each unique account at all touched vaults and controllers
+        for (uint256 n = 0; n < uniqueCount; n++) {
+            address account = uniqueAccounts[n];
 
-                // Check 1: Validate health at the touched vault
-                validateAccountHealthInvariant(targetContract, account);
+            // Check health at all touched vaults
+            for (uint256 v = 0; v < vaultCount; v++) {
+                validateAccountHealthInvariant(uniqueVaults[v], account);
+            }
 
-                // Check 2: Validate health at controller vaults
-                address[] memory controllers = evc.getControllers(account);
+            // Check health at all controller vaults
+            address[] memory controllers = evc.getControllers(account);
 
-                for (uint256 k = 0; k < controllers.length; k++) {
-                    address controller = controllers[k];
-                    if (controller.code.length == 0) continue;
+            for (uint256 k = 0; k < controllers.length; k++) {
+                address controller = controllers[k];
+                if (controller.code.length == 0) continue;
 
-                    validateAccountHealthInvariant(controller, account);
-                }
+                validateAccountHealthInvariant(controller, account);
             }
         }
     }
@@ -230,56 +308,92 @@ contract AccountHealthAssertion is Assertion {
     /// 4. Reverts if a healthy account becomes unhealthy
     ///
     /// NOTE: This covers collateral control operations that might affect account health
+    ///
+    /// OPTIMIZATION: Account Deduplication
+    /// Collects all unique accounts across all control collateral calls before validation
     function assertionControlCollateralAccountHealth() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all control collateral calls to analyze
         PhEvm.CallInputs[] memory controlCalls = ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
 
-        // Process all control collateral calls to ensure complete coverage
+        // PHASE 1: Collect all unique accounts across all control collateral calls
+        address[] memory uniqueAccounts = new address[](controlCalls.length * 2); // Max 2 accounts per call
+        uint256 uniqueCount = 0;
+        address[] memory uniqueVaults = new address[](controlCalls.length);
+        uint256 vaultCount = 0;
+
         for (uint256 i = 0; i < controlCalls.length; i++) {
-            // Decode control collateral parameters directly: (address targetCollateral, address onBehalfOfAccount,
-            // uint256 value, bytes data)
+            // Decode control collateral parameters
             (address targetCollateral, address onBehalfOfAccount,, bytes memory data) =
                 abi.decode(controlCalls[i].input, (address, address, uint256, bytes));
 
             // Skip non-contract addresses
             if (targetCollateral.code.length == 0) continue;
 
-            // Extract accounts affected by this operation
+            // Collect unique vault
+            bool vaultFound = false;
+            for (uint256 v = 0; v < vaultCount; v++) {
+                if (uniqueVaults[v] == targetCollateral) {
+                    vaultFound = true;
+                    break;
+                }
+            }
+            if (!vaultFound) {
+                uniqueVaults[vaultCount++] = targetCollateral;
+            }
+
+            // Extract and collect unique accounts
             address[] memory extractedAccounts = extractAccountsFromCalldata(data);
 
-            // Build list of all accounts to check
-            uint256 accountCount = (onBehalfOfAccount != address(0) ? 1 : 0) + extractedAccounts.length;
-            address[] memory accountsToCheck = new address[](accountCount);
-            uint256 idx = 0;
-
+            // Add onBehalfOfAccount if unique
             if (onBehalfOfAccount != address(0)) {
-                accountsToCheck[idx++] = onBehalfOfAccount;
+                bool found = false;
+                for (uint256 k = 0; k < uniqueCount; k++) {
+                    if (uniqueAccounts[k] == onBehalfOfAccount) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    uniqueAccounts[uniqueCount++] = onBehalfOfAccount;
+                }
             }
 
+            // Add extracted accounts if unique
             for (uint256 m = 0; m < extractedAccounts.length; m++) {
-                if (extractedAccounts[m] != address(0)) {
-                    accountsToCheck[idx++] = extractedAccounts[m];
+                if (extractedAccounts[m] == address(0)) continue;
+
+                bool found = false;
+                for (uint256 k = 0; k < uniqueCount; k++) {
+                    if (uniqueAccounts[k] == extractedAccounts[m]) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    uniqueAccounts[uniqueCount++] = extractedAccounts[m];
                 }
             }
+        }
 
-            // Validate health for all affected accounts
-            for (uint256 n = 0; n < idx; n++) {
-                address account = accountsToCheck[n];
+        // PHASE 2: Validate each unique account at all touched vaults and controllers
+        for (uint256 n = 0; n < uniqueCount; n++) {
+            address account = uniqueAccounts[n];
 
-                // Check 1: Validate health at the collateral vault
-                validateAccountHealthInvariant(targetCollateral, account);
+            // Check health at all touched collateral vaults
+            for (uint256 v = 0; v < vaultCount; v++) {
+                validateAccountHealthInvariant(uniqueVaults[v], account);
+            }
 
-                // Check 2: Validate health at controller vaults
-                address[] memory controllers = evc.getControllers(account);
+            // Check health at all controller vaults
+            address[] memory controllers = evc.getControllers(account);
 
-                for (uint256 k = 0; k < controllers.length; k++) {
-                    address controller = controllers[k];
-                    if (controller.code.length == 0) continue;
+            for (uint256 k = 0; k < controllers.length; k++) {
+                address controller = controllers[k];
+                if (controller.code.length == 0) continue;
 
-                    validateAccountHealthInvariant(controller, account);
-                }
+                validateAccountHealthInvariant(controller, account);
             }
         }
     }
