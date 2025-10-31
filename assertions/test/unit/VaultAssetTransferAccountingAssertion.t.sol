@@ -1,23 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import {CredibleTest} from "credible-std/CredibleTest.sol";
-import {Test} from "forge-std/Test.sol";
-import {VaultAssetTransferAccountingAssertion} from "../src/VaultAssetTransferAccountingAssertion.a.sol";
-import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
-import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
+import {BaseTest} from "../BaseTest.sol";
+import {VaultAssetTransferAccountingAssertion} from "../../src/VaultAssetTransferAccountingAssertion.a.sol";
+import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 // Import shared mocks
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockEVault} from "./mocks/MockEVault.sol";
-import {EventManipulatorVault} from "./mocks/MaliciousVaults.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockEVault} from "../mocks/MockEVault.sol";
+import {EventManipulatorVault} from "../mocks/MaliciousVaults.sol";
 
 /// @title TestVaultAssetTransferAccountingAssertion
 /// @notice Comprehensive test suite for the VaultAssetTransferAccountingAssertion assertion
 /// @dev Tests happy path scenarios with real protocol vaults and failure scenarios with mock malicious vaults
-contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
-    EthereumVaultConnector public evc;
+contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     VaultAssetTransferAccountingAssertion public assertion;
 
     // Test vaults (real protocol behavior)
@@ -28,13 +25,8 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
     MockERC20 public token1;
     MockERC20 public token2;
 
-    // Test users
-    address public user1 = address(0xBEEF);
-    address public user2 = address(0xCAFE);
-
-    function setUp() public {
-        // Deploy EVC
-        evc = new EthereumVaultConnector();
+    function setUp() public override {
+        super.setUp();
 
         // Deploy assertion
         assertion = new VaultAssetTransferAccountingAssertion();
@@ -48,24 +40,11 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
         vault2 = new MockEVault(token2, evc);
 
         // Setup test environment
-        vm.deal(user1, 100 ether);
-        vm.deal(user2, 100 ether);
+        setupUserETH();
 
-        // Mint tokens to test addresses
-        token1.mint(user1, 1000000e18);
-        token1.mint(user2, 1000000e18);
-        token2.mint(user1, 1000000e18);
-        token2.mint(user2, 1000000e18);
-
-        // Approve vaults to spend tokens
-        vm.prank(user1);
-        token1.approve(address(vault1), type(uint256).max);
-        vm.prank(user1);
-        token2.approve(address(vault2), type(uint256).max);
-        vm.prank(user2);
-        token1.approve(address(vault1), type(uint256).max);
-        vm.prank(user2);
-        token2.approve(address(vault2), type(uint256).max);
+        // Setup tokens (mint + approve)
+        setupToken(token1, address(vault1), 1000000e18);
+        setupToken(token2, address(vault2), 1000000e18);
     }
 
     // ========================================
@@ -401,10 +380,10 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
         // This is the realistic use case: controller vault liquidating user1, seizing collateral for user2 (liquidator)
         vm.prank(address(vault1));
         evc.controlCollateral(
-            address(vault2),  // collateral vault
-            user1,            // violator being liquidated
+            address(vault2), // collateral vault
+            user1, // violator being liquidated
             0,
-            abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18)  // seize 50 shares
+            abi.encodeWithSelector(MockEVault.seizeCollateral.selector, user1, user2, 50e18) // seize 50 shares
         );
 
         // Assertion should pass - Transfer event (50e18) matches Withdraw event (50e18)
@@ -657,5 +636,53 @@ contract TestVaultAssetTransferAccountingAssertion is CredibleTest, Test {
 
         vm.prank(user1);
         evc.batch(items);
+    }
+
+    // ========================================
+    // BOUNDARY CONDITION TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Transfer event with max uint256 amount - should handle gracefully
+    /// @dev Tests boundary condition with maximum possible transfer amount
+    ///
+    /// TEST SETUP:
+    /// - User has a very large deposit in vault
+    /// - User withdraws a very large amount (near uint256 max)
+    /// - Assertion should track the transfer correctly
+    ///
+    /// EXPECTED RESULT: Assertion should PASS (handles large transfer amounts)
+    /// NOTE: Using uint128 max for safety to avoid overflow in arithmetic operations
+    function testAssetTransferAccounting_MaxUint256Transfer_Passes() public {
+        // Setup: Enable vault1 as controller for user1
+        vm.prank(user1);
+        evc.enableController(user1, address(vault1));
+
+        // Mint a very large amount to user1
+        uint256 largeAmount = type(uint128).max; // Use uint128 max for safety
+        token1.mint(user1, largeAmount);
+
+        // User1 deposits the large amount
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, largeAmount, user1));
+
+        // Verify vault has large balance
+        uint256 vaultBalance = token1.balanceOf(address(vault1));
+        assertGt(vaultBalance, 1e38, "Vault should have very large balance");
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            fnSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector
+        });
+
+        // User1 withdraws a very large amount
+        uint256 withdrawAmount = largeAmount / 2; // Withdraw half
+        vm.prank(user1);
+        evc.call(
+            address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.withdraw.selector, withdrawAmount, user1, user1)
+        );
+
+        // Assertion should pass - handles large transfer amounts correctly
     }
 }

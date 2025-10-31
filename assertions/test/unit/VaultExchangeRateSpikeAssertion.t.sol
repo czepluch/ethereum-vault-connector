@@ -1,34 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import "forge-std/Test.sol";
-import {CredibleTest} from "credible-std/CredibleTest.sol";
-import {VaultExchangeRateSpikeAssertion} from "../src/VaultExchangeRateSpikeAssertion.a.sol";
-import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
-import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
+import {BaseTest} from "../BaseTest.sol";
+import {VaultExchangeRateSpikeAssertion} from "../../src/VaultExchangeRateSpikeAssertion.a.sol";
+import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "openzeppelin-contracts/interfaces/IERC4626.sol";
 
 // Import shared mocks
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockEVault} from "./mocks/MockEVault.sol";
-import {RateManipulatorVault} from "./mocks/MaliciousVaults.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockEVault} from "../mocks/MockEVault.sol";
+import {RateManipulatorVault} from "../mocks/MaliciousVaults.sol";
 
 /// @title TestVaultExchangeRateSpikeAssertion
 /// @notice Test suite for VaultExchangeRateSpikeAssertion
 /// @dev Tests the invariant: |rate_change| <= 5%
-contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
-    IEVC public evc;
+contract TestVaultExchangeRateSpikeAssertion is BaseTest {
     MockEVault public vault1;
     MockEVault public vault2;
     RateManipulatorVault public maliciousVault;
     MockERC20 public asset;
 
-    address public user1 = address(0xbEEF);
-    address public user2 = address(0xCAFE);
-
-    function setUp() public {
-        // Deploy EVC
-        evc = IEVC(address(new EthereumVaultConnector()));
+    function setUp() public override {
+        super.setUp();
 
         // Deploy mock asset
         asset = new MockERC20("Mock Asset", "MOCK");
@@ -40,22 +33,13 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
         // Deploy malicious vault
         maliciousVault = new RateManipulatorVault(asset, evc);
 
-        // Mint assets to users
-        asset.mint(user1, 10000e18);
-        asset.mint(user2, 10000e18);
+        // Setup tokens (mint + approve)
+        setupToken(asset, address(vault1), 10000e18);
+        setupToken(asset, address(vault2), 10000e18);
 
-        // Approve vaults
-        vm.prank(user1);
-        asset.approve(address(vault1), type(uint256).max);
-        vm.prank(user1);
-        asset.approve(address(vault2), type(uint256).max);
+        // Also approve malicious vault for user1
         vm.prank(user1);
         asset.approve(address(maliciousVault), type(uint256).max);
-
-        vm.prank(user2);
-        asset.approve(address(vault1), type(uint256).max);
-        vm.prank(user2);
-        asset.approve(address(vault2), type(uint256).max);
     }
 
     // ========================================
@@ -291,7 +275,7 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
 
     /// @notice SCENARIO: skim() operation passes with small rate change
     /// @dev skim() mints proportional shares, so rate change should be minimal (within 5%)
-    ///      This test verifies skim doesn't cause rate spikes even though it's not exempted
+    ///      This test verifies skim doesn't cause rate spikes
     function testExchangeRateSpike_Batch_SkimSmallRateChange_Passes() public {
         // Setup: Initial deposit
         vm.prank(user1);
@@ -407,7 +391,7 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
-        // Execute batch call - should fail with decrease-specific error
+        // Execute batch call - should fail
         vm.prank(user1);
         vm.expectRevert("VaultExchangeRateSpikeAssertion: Exchange rate decreased >5% without debt socialization");
         evc.batch(items);
@@ -468,5 +452,53 @@ contract TestVaultExchangeRateSpikeAssertion is CredibleTest, Test {
 
         vm.prank(user1);
         evc.batch(items);
+    }
+
+    // ========================================
+    // BOUNDARY CONDITION TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Exchange rate at uint256 boundaries - should handle gracefully
+    /// @dev Tests boundary condition with very large exchange rate values
+    ///
+    /// TEST SETUP:
+    /// - Vault has very large totalAssets and totalSupply values
+    /// - User performs a deposit that slightly changes the exchange rate
+    /// - Exchange rate should still be within acceptable bounds
+    ///
+    /// EXPECTED RESULT: Assertion should PASS (handles large exchange rate values)
+    /// NOTE: Using safe large values (uint128 max) to avoid overflow while testing boundaries
+    function testExchangeRateSpike_Uint256Boundaries_Passes() public {
+        // Setup: Enable vault1 as controller for user1
+        vm.prank(user1);
+        evc.enableController(user1, address(vault1));
+
+        // Mint a very large amount to user1 to create large exchange rate base
+        uint256 largeAmount = type(uint128).max; // Use uint128 max for safety
+        asset.mint(user1, largeAmount);
+
+        // User1 makes an initial large deposit
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, largeAmount, user1));
+
+        // Verify vault has large exchange rate base
+        uint256 totalAssets = vault1.totalAssets();
+        assertGt(totalAssets, 1e38, "Vault should have very large totalAssets");
+
+        // Mint more for second deposit
+        asset.mint(user1, 1000e18);
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            fnSelector: VaultExchangeRateSpikeAssertion.assertionCallExchangeRateSpike.selector
+        });
+
+        // User1 makes a small deposit relative to total (should cause minimal rate change)
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 1000e18, user1));
+
+        // Assertion should pass - rate change is minimal even with large base values
     }
 }

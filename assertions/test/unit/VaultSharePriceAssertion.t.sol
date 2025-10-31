@@ -1,44 +1,35 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import {CredibleTest} from "credible-std/CredibleTest.sol";
-import {Test} from "forge-std/Test.sol";
-import {VaultSharePriceAssertion} from "../src/VaultSharePriceAssertion.a.sol";
-import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
-import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
+import {BaseTest} from "../BaseTest.sol";
+import {VaultSharePriceAssertion} from "../../src/VaultSharePriceAssertion.a.sol";
+import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-
-// Import shared mocks
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockSharePriceVault, MockControllerVault} from "./mocks/MockSharePriceVault.sol";
+import {ERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
+import {ERC4626} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
 
 /// @title TestVaultSharePriceAssertion
 /// @notice Comprehensive test suite for the VaultSharePriceAssertion assertion
-contract TestVaultSharePriceAssertion is CredibleTest, Test {
-    EthereumVaultConnector public evc;
+contract TestVaultSharePriceAssertion is BaseTest {
     VaultSharePriceAssertion public assertion;
 
     // Test vaults
-    MockSharePriceVault public vault1;
-    MockSharePriceVault public vault2;
-    MockSharePriceVault public vault3;
+    MockERC4626Vault public vault1;
+    MockERC4626Vault public vault2;
+    MockERC4626Vault public vault3;
 
     // Test tokens
     MockERC20 public token1;
     MockERC20 public token2;
     MockERC20 public token3;
 
-    // Test users
-    address public user1 = address(0xBEEF);
-    address public user2 = address(0xCAFE);
-
     // Controller vault for controlCollateral tests
     MockControllerVault public controllerVault;
 
-    function setUp() public {
-        // Deploy EVC
-        evc = new EthereumVaultConnector();
+    function setUp() public override {
+        super.setUp();
 
         // Deploy assertion
         assertion = new VaultSharePriceAssertion();
@@ -49,24 +40,20 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         token3 = new MockERC20("Test Token 3", "TT3");
 
         // Deploy test vaults
-        vault1 = new MockSharePriceVault(token1);
-        vault2 = new MockSharePriceVault(token2);
-        vault3 = new MockSharePriceVault(token3);
+        vault1 = new MockERC4626Vault(token1);
+        vault2 = new MockERC4626Vault(token2);
+        vault3 = new MockERC4626Vault(token3);
 
         // Deploy controller vault
         controllerVault = new MockControllerVault();
 
         // Setup test environment
-        vm.deal(user1, 100 ether);
-        vm.deal(user2, 100 ether);
+        setupUserETH();
 
-        // Mint tokens to test addresses
-        token1.mint(user1, 1000000e18);
-        token1.mint(user2, 1000000e18);
-        token2.mint(user1, 1000000e18);
-        token2.mint(user2, 1000000e18);
-        token3.mint(user1, 1000000e18);
-        token3.mint(user2, 1000000e18);
+        // Mint tokens to test addresses (no vault approval needed for MockERC4626Vault)
+        mintTokensToUsers(token1, 1000000e18);
+        mintTokensToUsers(token2, 1000000e18);
+        mintTokensToUsers(token3, 1000000e18);
     }
 
     /// @notice SCENARIO: Normal vault operation - share price increases
@@ -90,7 +77,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockSharePriceVault.increaseSharePrice.selector, 100e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 100e18);
 
         // Register assertion for the batch call (this will trigger on the next call)
         cl.assertion({
@@ -127,7 +114,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockSharePriceVault.noOp.selector);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.noOp.selector);
 
         // Register assertion for the batch call
         cl.assertion({
@@ -165,7 +152,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockSharePriceVault.decreaseSharePrice.selector, 100e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18);
 
         // Register assertion for the batch call
         cl.assertion({
@@ -202,7 +189,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockSharePriceVault.decreaseSharePriceWithBadDebt.selector, 100e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseSharePriceWithBadDebt.selector, 100e18);
 
         // Register assertion for the batch call
         cl.assertion({
@@ -245,17 +232,17 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockSharePriceVault.increaseSharePrice.selector, 50e18);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 50e18);
 
         items[1].targetContract = address(vault2);
         items[1].onBehalfOfAccount = user1;
         items[1].value = 0;
-        items[1].data = abi.encodeWithSelector(MockSharePriceVault.noOp.selector);
+        items[1].data = abi.encodeWithSelector(MockERC4626Vault.noOp.selector);
 
         items[2].targetContract = address(vault3);
         items[2].onBehalfOfAccount = user1;
         items[2].value = 0;
-        items[2].data = abi.encodeWithSelector(MockSharePriceVault.increaseSharePrice.selector, 25e18);
+        items[2].data = abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 25e18);
 
         // Register assertion for next transaction
         cl.assertion({
@@ -288,7 +275,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         // Execute single call
         vm.prank(user1);
         evc.call(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockSharePriceVault.increaseSharePrice.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 100e18)
         );
 
         // Assertion should pass
@@ -312,7 +299,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         vm.prank(user1);
         vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.call(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockSharePriceVault.decreaseSharePrice.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
     }
 
@@ -342,7 +329,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         // Execute control collateral call from controller
         vm.prank(address(controllerVault));
         evc.controlCollateral(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockSharePriceVault.increaseSharePrice.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.increaseSharePrice.selector, 100e18)
         );
 
         // Assertion should pass
@@ -375,7 +362,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         vm.prank(address(controllerVault));
         vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.controlCollateral(
-            address(vault1), user1, 0, abi.encodeWithSelector(MockSharePriceVault.decreaseSharePrice.selector, 100e18)
+            address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
     }
 
@@ -395,7 +382,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
         // Use a function that doesn't require token ownership - just call balanceOf
-        items[0].data = abi.encodeWithSelector(IERC20.balanceOf.selector, user1);
+        items[0].data = abi.encodeWithSelector(ERC20.balanceOf.selector, user1);
 
         // Register assertion for next transaction
         cl.assertion({
@@ -461,7 +448,7 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockSharePriceVault.noOp.selector);
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.noOp.selector);
 
         // Register assertion for next transaction
         cl.assertion({
@@ -475,5 +462,220 @@ contract TestVaultSharePriceAssertion is CredibleTest, Test {
         evc.batch(items);
 
         // Assertion should pass - zero total supply is handled gracefully
+    }
+
+    // ========================================
+    // BOUNDARY CONDITION TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Zero assets but non-zero shares - should handle edge case
+    /// @dev Tests boundary condition where totalAssets is 0 but totalSupply is non-zero
+    ///
+    /// TEST SETUP:
+    /// - Deploy a fresh mock vault (not as controller, just as regular vault)
+    /// - Mint shares directly to user (MockSharePriceVault doesn't implement deposit)
+    /// - Set initial totalAssets to simulate normal vault state
+    /// - Vault suffers catastrophic loss (totalAssets = 0, totalSupply > 0)
+    /// - User performs a no-op operation through EVC
+    /// - Share price is effectively 0 (complete loss)
+    ///
+    /// EXPECTED RESULT: Assertion should PASS (handles zero asset edge case)
+    /// NOTE: This represents an extreme loss scenario - assertion should not revert on math errors
+    function testVaultSharePrice_ZeroAssetsNonZeroShares_Handles() public {
+        // Deploy a fresh mock vault (not used as controller)
+        MockERC4626Vault testVault = new MockERC4626Vault(token1);
+
+        // Set initial totalAssets to simulate normal vault state
+        testVault.setTotalAssets(1000e18);
+
+        // Mint shares directly to user (deposit not implemented in mock)
+        testVault.mint(1000e18, user1);
+
+        // Verify shares were created
+        uint256 shares = testVault.balanceOf(user1);
+        assertGt(shares, 0, "User should have shares");
+
+        // Record initial assets
+        uint256 initialAssets = testVault.totalAssets();
+        assertGt(initialAssets, 0, "Initial assets should be non-zero");
+
+        // Simulate catastrophic loss - set assets to 0 while shares remain
+        testVault.setTotalAssets(0);
+
+        // Verify edge case: zero assets, non-zero shares (share price = 0)
+        assertEq(testVault.totalAssets(), 0, "Assets should be zero");
+        assertGt(testVault.totalSupply(), 0, "Supply should be non-zero");
+
+        // Register assertion for batch operation
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
+        });
+
+        // Execute a batch with no-op to trigger assertion
+        // The assertion should handle the zero assets case without reverting
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(testVault);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.noOp.selector);
+
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Assertion should pass - handles zero assets / non-zero shares edge case
+    }
+}
+
+/// @title MockERC4626Vault
+/// @notice Mock ERC4626 vault for testing
+contract MockERC4626Vault is ERC4626 {
+    uint256 private _totalAssets;
+
+    // Events for bad debt socialization simulation
+    event Repay(address indexed account, uint256 assets);
+
+    constructor(
+        ERC20 assetToken
+    ) ERC4626(assetToken) ERC20("Mock Vault", "MV") {}
+
+    function setTotalAssets(
+        uint256 assets
+    ) external {
+        _totalAssets = assets;
+    }
+
+    function totalAssets() public view override returns (uint256) {
+        return _totalAssets;
+    }
+
+    function increaseSharePrice(
+        uint256 amount
+    ) external {
+        _totalAssets += amount;
+        // Keep total supply the same to increase share price
+    }
+
+    function decreaseSharePrice(
+        uint256 amount
+    ) external {
+        require(_totalAssets >= amount, "Insufficient assets");
+        _totalAssets -= amount;
+        // Keep total supply the same to decrease share price
+        // No events emitted - this simulates malicious share price decrease
+    }
+
+    function decreaseSharePriceWithBadDebt(
+        uint256 amount
+    ) external {
+        require(_totalAssets >= amount, "Insufficient assets");
+        _totalAssets -= amount;
+        // Keep total supply the same to decrease share price
+
+        // Emit events to simulate bad debt socialization as per Euler whitepaper:
+        // - Repay event from liquidator (not address(0))
+        // - Withdraw event from address(0)
+        address liquidator = address(0x1234567890123456789012345678901234567890); // Mock liquidator
+        emit Repay(liquidator, amount);
+        emit Withdraw(address(0), address(0), address(0), amount, 0);
+    }
+
+    function noOp() external {
+        // Do nothing
+    }
+
+    // Required IVault interface functions
+    function checkVaultStatus() external pure returns (bytes4) {
+        return this.checkVaultStatus.selector;
+    }
+
+    // Required ERC4626 functions (simplified for testing)
+    function deposit(uint256, address) public pure override returns (uint256) {
+        revert("Not implemented for testing");
+    }
+
+    function mint(uint256 shares, address receiver) public override returns (uint256) {
+        _mint(receiver, shares);
+        return shares;
+    }
+
+    function withdraw(uint256, address, address) public pure override returns (uint256) {
+        revert("Not implemented for testing");
+    }
+
+    function redeem(uint256, address, address) public pure override returns (uint256) {
+        revert("Not implemented for testing");
+    }
+
+    function maxDeposit(
+        address
+    ) public pure override returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxMint(
+        address
+    ) public pure override returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxWithdraw(
+        address
+    ) public pure override returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function maxRedeem(
+        address
+    ) public pure override returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function previewDeposit(
+        uint256
+    ) public pure override returns (uint256) {
+        return 0;
+    }
+
+    function previewMint(
+        uint256
+    ) public pure override returns (uint256) {
+        return 0;
+    }
+
+    function previewWithdraw(
+        uint256
+    ) public pure override returns (uint256) {
+        return 0;
+    }
+
+    function previewRedeem(
+        uint256
+    ) public pure override returns (uint256) {
+        return 0;
+    }
+
+    function convertToShares(
+        uint256
+    ) public pure override returns (uint256) {
+        return 0;
+    }
+
+    function convertToAssets(
+        uint256
+    ) public pure override returns (uint256) {
+        return 0;
+    }
+}
+
+/// @title MockControllerVault
+/// @notice Mock controller vault for testing controlCollateral functionality
+contract MockControllerVault {
+    // Simple controller vault that can be used for controlCollateral tests
+    // Implements the required checkAccountStatus function that EVC expects from controllers
+
+    function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
+        return this.checkAccountStatus.selector;
     }
 }

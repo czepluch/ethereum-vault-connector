@@ -1,34 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import "forge-std/Test.sol";
-import {CredibleTest} from "credible-std/CredibleTest.sol";
-import {VaultAccountingIntegrityAssertion} from "../src/VaultAccountingIntegrityAssertion.a.sol";
-import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
-import {EthereumVaultConnector} from "../../src/EthereumVaultConnector.sol";
+import {BaseTest} from "../BaseTest.sol";
+import {VaultAccountingIntegrityAssertion} from "../../src/VaultAccountingIntegrityAssertion.a.sol";
+import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "openzeppelin-contracts/interfaces/IERC4626.sol";
 
 // Import shared mocks
-import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockEVault} from "./mocks/MockEVault.sol";
-import {CashThiefVault} from "./mocks/MaliciousVaults.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockEVault} from "../mocks/MockEVault.sol";
+import {CashThiefVault} from "../mocks/MaliciousVaults.sol";
 
 /// @title TestVaultAccountingIntegrityAssertion
 /// @notice Test suite for VaultAccountingIntegrityAssertion
 /// @dev Tests the invariant: balance >= cash
-contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
-    IEVC public evc;
+contract TestVaultAccountingIntegrityAssertion is BaseTest {
     MockEVault public vault1;
     MockEVault public vault2;
     CashThiefVault public maliciousVault;
     MockERC20 public asset;
 
-    address public user1 = address(0xbEEF);
-    address public user2 = address(0xCAFE);
-
-    function setUp() public {
-        // Deploy EVC
-        evc = IEVC(address(new EthereumVaultConnector()));
+    function setUp() public override {
+        super.setUp();
 
         // Deploy mock asset
         asset = new MockERC20("Mock Asset", "MOCK");
@@ -40,22 +33,13 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
         // Deploy malicious vault
         maliciousVault = new CashThiefVault(asset, evc);
 
-        // Mint assets to users
-        asset.mint(user1, 1000e18);
-        asset.mint(user2, 1000e18);
+        // Setup tokens (mint + approve)
+        setupToken(asset, address(vault1), 1000e18);
+        setupToken(asset, address(vault2), 1000e18);
 
-        // Approve vaults to spend user assets
-        vm.prank(user1);
-        asset.approve(address(vault1), type(uint256).max);
-        vm.prank(user1);
-        asset.approve(address(vault2), type(uint256).max);
+        // Also approve malicious vault for user1
         vm.prank(user1);
         asset.approve(address(maliciousVault), type(uint256).max);
-
-        vm.prank(user2);
-        asset.approve(address(vault1), type(uint256).max);
-        vm.prank(user2);
-        asset.approve(address(vault2), type(uint256).max);
     }
 
     // ========================================
@@ -440,5 +424,50 @@ contract TestVaultAccountingIntegrityAssertion is CredibleTest, Test {
 
         vm.prank(user1);
         evc.batch(items);
+    }
+
+    // ========================================
+    // BOUNDARY CONDITION TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Vault with max uint256 cash value - should handle gracefully
+    /// @dev Tests boundary condition with maximum possible cash value
+    ///
+    /// TEST SETUP:
+    /// - Vault has very large cash value (near uint256 max)
+    /// - User performs a withdrawal
+    /// - Invariant: balance >= cash should still hold
+    ///
+    /// EXPECTED RESULT: Assertion should PASS (handles large values correctly)
+    /// NOTE: We use a large but safe value (uint256.max / 2) to avoid overflow in arithmetic
+    function testVaultAccountingIntegrity_MaxUint256Cash_Passes() public {
+        // Setup: Enable vault1 as controller for user1
+        vm.prank(user1);
+        evc.enableController(user1, address(vault1));
+
+        // Mint a very large amount to user1 (half of max to avoid overflows)
+        uint256 largeAmount = type(uint256).max / 2;
+        asset.mint(user1, largeAmount);
+
+        // User1 deposits the large amount
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, largeAmount, user1));
+
+        // Verify vault has large cash value
+        uint256 vaultCash = vault1.cash();
+        assertGt(vaultCash, 1e70, "Vault should have very large cash value");
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            fnSelector: VaultAccountingIntegrityAssertion.assertionCallAccountingIntegrity.selector
+        });
+
+        // User1 withdraws a small amount
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.withdraw.selector, 100e18, user1, user1));
+
+        // Assertion should pass - invariant balance >= cash holds even with max values
     }
 }

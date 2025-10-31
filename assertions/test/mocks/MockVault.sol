@@ -28,12 +28,16 @@ contract MockVault is ERC20, IVault {
     }
 
     /// @notice Set flag to break health invariant during operations
-    function setBreakHealthInvariant(bool value) external {
+    function setBreakHealthInvariant(
+        bool value
+    ) external {
         shouldBreakHealthInvariant = value;
     }
 
     /// @notice Set flag to lie about account health in checkAccountStatus
-    function setLieAboutHealth(bool value) external {
+    function setLieAboutHealth(
+        bool value
+    ) external {
         shouldLieAboutHealth = value;
     }
 
@@ -105,6 +109,80 @@ contract MockVault is ERC20, IVault {
         return amount;
     }
 
+    /// @notice Withdraw assets by burning shares (ERC4626 style)
+    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256) {
+        require(assets > 0, "Invalid amount");
+        require(receiver != address(0), "Invalid receiver");
+        require(owner != address(0), "Invalid owner");
+
+        // Get the actual account from EVC context
+        (address account,) = evc.getCurrentOnBehalfOfAccount(address(0));
+        if (account == address(0)) {
+            account = msg.sender;
+        }
+
+        // Burn shares 1:1 for simplicity
+        _burn(owner, assets);
+
+        // Transfer assets to receiver
+        asset.transfer(receiver, assets);
+
+        return assets;
+    }
+
+    /// @notice Redeem shares for assets (ERC4626 style)
+    function redeem(uint256 shares, address receiver, address owner) external returns (uint256) {
+        require(shares > 0, "Invalid amount");
+        require(receiver != address(0), "Invalid receiver");
+        require(owner != address(0), "Invalid owner");
+
+        // Get the actual account from EVC context
+        (address account,) = evc.getCurrentOnBehalfOfAccount(address(0));
+        if (account == address(0)) {
+            account = msg.sender;
+        }
+
+        // Burn shares
+        _burn(owner, shares);
+
+        // Transfer assets 1:1 for simplicity
+        asset.transfer(receiver, shares);
+
+        return shares;
+    }
+
+    /// @notice Transfer shares from one account to another (ERC20 style)
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+        require(from != address(0), "Invalid from");
+        require(to != address(0), "Invalid to");
+        return super.transferFrom(from, to, amount);
+    }
+
+    /// @notice Liquidate an unhealthy account
+    function liquidate(
+        address violator,
+        address liquidator,
+        uint256 repayAssets,
+        uint256 collateralShares
+    ) external returns (uint256) {
+        require(violator != address(0), "Invalid violator");
+        require(liquidator != address(0), "Invalid liquidator");
+        require(repayAssets > 0, "Invalid repay amount");
+
+        // Reduce violator's liability
+        require(liabilities[violator] >= repayAssets, "Repay exceeds liability");
+        liabilities[violator] -= repayAssets;
+        totalLiabilities -= repayAssets;
+
+        // Transfer collateral shares from violator to liquidator
+        _transfer(violator, liquidator, collateralShares);
+
+        // Get assets from liquidator to repay debt
+        asset.transferFrom(liquidator, address(this), repayAssets);
+
+        return collateralShares;
+    }
+
     /// @notice Transfer shares between accounts
     function transfer(address to, uint256 amount) public override returns (bool) {
         require(to != address(0), "Invalid receiver");
@@ -113,12 +191,10 @@ contract MockVault is ERC20, IVault {
 
     /// @notice Check account status (health check)
     /// @dev Returns magic value if healthy, reverts if unhealthy
-    function checkAccountStatus(address account, address[] calldata collaterals)
-        external
-        view
-        override
-        returns (bytes4 magicValue)
-    {
+    function checkAccountStatus(
+        address account,
+        address[] calldata collaterals
+    ) external view override returns (bytes4 magicValue) {
         // If flag is set, lie and say account is healthy regardless of actual health
         if (shouldLieAboutHealth) {
             return this.checkAccountStatus.selector;
@@ -157,11 +233,10 @@ contract MockVault is ERC20, IVault {
 
     /// @notice Get account liquidity (alternative to checkAccountStatus)
     /// @dev Returns collateral and liability values
-    function accountLiquidity(address account, bool)
-        external
-        view
-        returns (uint256 collateralValue, uint256 liabilityValue)
-    {
+    function accountLiquidity(
+        address account,
+        bool
+    ) external view returns (uint256 collateralValue, uint256 liabilityValue) {
         // Get collaterals for the account
         address[] memory collaterals = evc.getCollaterals(account);
 
