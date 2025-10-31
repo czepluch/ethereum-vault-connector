@@ -112,26 +112,60 @@ contract AccountHealthAssertion is Assertion {
             // Decode batch call parameters directly: (BatchItem[] items)
             IEVC.BatchItem[] memory items = abi.decode(batchCalls[i].input, (IEVC.BatchItem[]));
 
-            // PHASE 1: Collect all unique accounts across all batch items
+            // PHASE 1 & 2 COMBINED: Collect all unique accounts AND vaults in single pass
             // We use a simple array + linear search since batch sizes are typically small (< 10 items)
             // For larger batches, this is still better than redundant health checks
             address[] memory uniqueAccounts = new address[](items.length * 2); // Max 2 accounts per item
             uint256 uniqueCount = 0;
+            address[] memory uniqueVaults = new address[](items.length);
+            uint256 vaultCount = 0;
 
-            for (uint256 j = 0; j < items.length; j++) {
+            for (uint256 j = 0; j < items.length;) {
                 // Skip non-contract addresses
-                if (items[j].targetContract.code.length == 0) continue;
+                if (items[j].targetContract.code.length == 0) {
+                    unchecked {
+                        ++j;
+                    }
+                    continue;
+                }
 
-                // Extract accounts affected by this operation
+                // Extract accounts affected by this operation (does selector check internally)
                 address[] memory extractedAccounts = extractAccountsFromCalldata(items[j].data);
+
+                // Early exit: if no accounts extracted, this is a non-monitored operation
+                // (deposit, mint, transfer, etc.) - skip all further processing
+                if (extractedAccounts.length == 0 && items[j].onBehalfOfAccount == address(0)) {
+                    unchecked {
+                        ++j;
+                    }
+                    continue;
+                }
+
+                // Collect unique vaults
+                bool vaultFound = false;
+                for (uint256 k = 0; k < vaultCount;) {
+                    if (uniqueVaults[k] == items[j].targetContract) {
+                        vaultFound = true;
+                        break;
+                    }
+                    unchecked {
+                        ++k;
+                    }
+                }
+                if (!vaultFound) {
+                    uniqueVaults[vaultCount++] = items[j].targetContract;
+                }
 
                 // Add onBehalfOfAccount if present and unique
                 if (items[j].onBehalfOfAccount != address(0)) {
                     bool found = false;
-                    for (uint256 k = 0; k < uniqueCount; k++) {
+                    for (uint256 k = 0; k < uniqueCount;) {
                         if (uniqueAccounts[k] == items[j].onBehalfOfAccount) {
                             found = true;
                             break;
+                        }
+                        unchecked {
+                            ++k;
                         }
                     }
                     if (!found) {
@@ -140,39 +174,29 @@ contract AccountHealthAssertion is Assertion {
                 }
 
                 // Add extracted accounts if unique
-                for (uint256 m = 0; m < extractedAccounts.length; m++) {
-                    if (extractedAccounts[m] == address(0)) continue;
-
-                    bool found = false;
-                    for (uint256 k = 0; k < uniqueCount; k++) {
-                        if (uniqueAccounts[k] == extractedAccounts[m]) {
-                            found = true;
-                            break;
+                for (uint256 m = 0; m < extractedAccounts.length;) {
+                    if (extractedAccounts[m] != address(0)) {
+                        bool found = false;
+                        for (uint256 k = 0; k < uniqueCount;) {
+                            if (uniqueAccounts[k] == extractedAccounts[m]) {
+                                found = true;
+                                break;
+                            }
+                            unchecked {
+                                ++k;
+                            }
+                        }
+                        if (!found) {
+                            uniqueAccounts[uniqueCount++] = extractedAccounts[m];
                         }
                     }
-                    if (!found) {
-                        uniqueAccounts[uniqueCount++] = extractedAccounts[m];
+                    unchecked {
+                        ++m;
                     }
                 }
-            }
 
-            // PHASE 2: Validate each unique account once at all touched vaults + controllers
-            // We still need to check each touched vault, so collect unique vaults too
-            address[] memory uniqueVaults = new address[](items.length);
-            uint256 vaultCount = 0;
-
-            for (uint256 j = 0; j < items.length; j++) {
-                if (items[j].targetContract.code.length == 0) continue;
-
-                bool found = false;
-                for (uint256 k = 0; k < vaultCount; k++) {
-                    if (uniqueVaults[k] == items[j].targetContract) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    uniqueVaults[vaultCount++] = items[j].targetContract;
+                unchecked {
+                    ++j;
                 }
             }
 
@@ -488,14 +512,15 @@ contract AccountHealthAssertion is Assertion {
             return new address[](0);
         }
 
-        bytes4 selector = bytes4(data[0]) | (bytes4(data[1]) >> 8) | (bytes4(data[2]) >> 16) | (bytes4(data[3]) >> 24);
+        // Extract selector using assembly (more efficient than manual bit manipulation)
+        bytes4 selector;
+        assembly {
+            selector := mload(add(data, 32))
+        }
 
         // withdraw(uint256,address,address) - 0xb460af94
         // redeem(uint256,address,address) - 0xba087652
         if (selector == 0xb460af94 || selector == 0xba087652) {
-            // Need 4 (selector) + 32 (uint256) + 32 (address) + 32 (address) = 100 bytes
-            if (data.length < 100) return new address[](0);
-
             // Extract owner (3rd parameter at offset 68)
             address owner;
             assembly {
@@ -509,9 +534,6 @@ contract AccountHealthAssertion is Assertion {
 
         // transferFrom(address,address,uint256) - 0x23b872dd
         if (selector == 0x23b872dd) {
-            // Need 4 (selector) + 32 (address) + 32 (address) + 32 (uint256) = 100 bytes
-            if (data.length < 100) return new address[](0);
-
             // Extract from (1st parameter at offset 4)
             address from;
             assembly {
@@ -526,9 +548,6 @@ contract AccountHealthAssertion is Assertion {
         // borrow(uint256,address) - 0xc5ebeaec
         // repay(uint256,address) - 0x371fd8e6
         if (selector == 0xc5ebeaec || selector == 0x371fd8e6) {
-            // Need 4 (selector) + 32 (uint256) + 32 (address) = 68 bytes
-            if (data.length < 68) return new address[](0);
-
             // Extract receiver/debtor (2nd parameter at offset 36)
             address account;
             assembly {
@@ -542,9 +561,6 @@ contract AccountHealthAssertion is Assertion {
 
         // liquidate(address,address,uint256,uint256) - 0xc1342574
         if (selector == 0xc1342574) {
-            // Need 4 (selector) + 32 (address violator) + remaining params = at least 68 bytes
-            if (data.length < 68) return new address[](0);
-
             // Extract violator (1st parameter at offset 4)
             address violator;
             assembly {

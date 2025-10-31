@@ -2489,6 +2489,106 @@ contract TestAccountHealthAssertion is BaseTest {
         assertEq(vault1.liabilities(user1), 100e18, "User1 should have 100e18 liability");
     }
 
+    /// @notice MIXED OPERATIONS TEST: Single user manages position with deposit, borrow, repay, withdraw
+    /// @dev Realistic scenario: User rebalances their position in a single batch with multiple operation types
+    ///
+    /// TEST SCENARIO:
+    /// SETUP (before batch):
+    /// - User1 has 100e18 collateral deposited in vault2
+    /// - User1 has 50e18 borrowed from vault1
+    /// - Health: collateralValue=100, liabilityValue=50 (2:1 ratio, healthy)
+    ///
+    /// BATCH OPERATIONS (4 operations):
+    /// 1. Deposit 25e18 to vault2 (improve collateral before borrowing more)
+    ///    → New collateral: 125e18
+    /// 2. Borrow 30e18 from vault1 (take more loan while health is good)
+    ///    → New liability: 80e18, health ratio: 125:80 ≈ 1.56:1
+    /// 3. Repay 20e18 to vault1 (reduce debt)
+    ///    → New liability: 60e18, health ratio: 125:60 ≈ 2.08:1
+    /// 4. Withdraw 15e18 from vault2 (take profit)
+    ///    → Final: collateral=110e18, liability=60e18, ratio: 110:60 ≈ 1.83:1
+    ///
+    /// WHAT THIS TESTS:
+    /// - Mixed monitored (borrow, repay, withdraw) and non-monitored (deposit) operations
+    /// - Cross-vault interactions (vault1=liability, vault2=collateral)
+    /// - Cumulative position changes remain healthy throughout
+    /// - Assertion validates net effect correctly
+    /// - Realistic user behavior: rebalancing position in single batch
+    ///
+    /// EXPECTED: PASS - Final position is healthy, gas should be ~89k (similar to 5 borrows cross-vault)
+    function testBatch_SingleAccount_MixedOperations_Passes() public {
+        // Setup liquidity: user3 deposits in vault1 so there's assets to borrow
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1's initial position: 100e18 collateral, 50e18 borrowed
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1)); // vault1 = liability vault
+        evc.enableCollateral(user1, address(vault2)); // vault2 = collateral vault
+        vm.stopPrank();
+
+        // Initial deposit: 100e18 collateral in vault2
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        // Initial borrow: 50e18 from vault1
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user1));
+
+        // Verify initial state
+        assertEq(vault2.balanceOf(user1), 100e18, "Initial collateral should be 100e18");
+        assertEq(vault1.liabilities(user1), 50e18, "Initial liability should be 50e18");
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create batch with mixed operations
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](4);
+
+        // Operation 1: Deposit 25e18 more collateral
+        items[0].targetContract = address(vault2);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockVault.deposit.selector, 25e18, user1);
+
+        // Operation 2: Borrow 30e18 more
+        items[1].targetContract = address(vault1);
+        items[1].onBehalfOfAccount = user1;
+        items[1].value = 0;
+        items[1].data = abi.encodeWithSelector(MockVault.borrow.selector, 30e18, user1);
+
+        // Operation 3: Repay 20e18
+        items[2].targetContract = address(vault1);
+        items[2].onBehalfOfAccount = user1;
+        items[2].value = 0;
+        items[2].data = abi.encodeWithSelector(MockVault.repay.selector, 20e18, user1);
+
+        // Operation 4: Withdraw 15e18
+        items[3].targetContract = address(vault2);
+        items[3].onBehalfOfAccount = user1;
+        items[3].value = 0;
+        items[3].data = abi.encodeWithSelector(MockVault.withdraw.selector, 15e18, user1, user1);
+
+        // Execute batch - should pass with healthy final position
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Verify final state
+        assertEq(vault2.balanceOf(user1), 110e18, "Final collateral: 100 + 25 - 15 = 110e18");
+        assertEq(vault1.liabilities(user1), 60e18, "Final liability: 50 + 30 - 20 = 60e18");
+
+        // Health ratio: 110:60 ≈ 1.83:1 (healthy)
+        assertTrue(vault2.balanceOf(user1) > vault1.liabilities(user1), "Position should remain healthy");
+    }
+
     // =====================================================
     // SECTION 8: GAS & BATCH SIZE LIMITS
     // =====================================================
