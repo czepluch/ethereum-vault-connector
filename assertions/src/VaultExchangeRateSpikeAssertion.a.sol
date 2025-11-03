@@ -56,8 +56,8 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
         registerCallTrigger(this.assertionControlCollateralExchangeRateSpike.selector, IEVC.controlCollateral.selector);
     }
 
-    /// @notice Monitors EVC.batch() calls to validate exchange rate changes for all vaults in the batch
-    /// @dev Extracts all vault addresses from batch items and validates rate once per unique vault
+    /// @notice Validates exchange rate changes for batch operations
+    /// @dev Validates each unique vault in batch once
     function assertionBatchExchangeRateSpike() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory batchCalls = ph.getCallInputs(address(evc), IEVC.batch.selector);
@@ -107,8 +107,8 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
         }
     }
 
-    /// @notice Monitors EVC.call() to validate exchange rate changes for the target vault
-    /// @dev Extracts the target contract from call parameters and validates rate
+    /// @notice Validates exchange rate changes for call operations
+    /// @dev Validates target contract from call parameters
     function assertionCallExchangeRateSpike() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory callInputs = ph.getCallInputs(address(evc), IEVC.call.selector);
@@ -121,8 +121,8 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
         }
     }
 
-    /// @notice Monitors EVC.controlCollateral() to validate exchange rate changes for the collateral vault
-    /// @dev Extracts the target collateral from controlCollateral parameters and validates rate
+    /// @notice Validates exchange rate changes for controlCollateral operations
+    /// @dev Validates target collateral from controlCollateral parameters
     function assertionControlCollateralExchangeRateSpike() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory controlInputs = ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
@@ -137,10 +137,9 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
         }
     }
 
-    /// @notice Validates that a vault's exchange rate hasn't spiked beyond the threshold
-    /// @dev Compares pre/post exchange rates and ensures change is within 5%
-    ///      Allows sudden decreases when debt socialization occurs
-    /// @param vault The vault address to validate exchange rate for
+    /// @notice Validates vault's exchange rate change is within 5% threshold
+    /// @dev Allows rate decreases >5% when debt socialization occurs
+    /// @param vault The vault address to validate
     function validateVaultExchangeRateSpike(
         address vault
     ) internal {
@@ -183,7 +182,6 @@ contract VaultExchangeRateSpikeAssertion is Assertion {
     }
 
     /// @notice Gets the exchange rate for a vault (assets per share, scaled by 1e18)
-    /// @dev Returns (rate, true) if valid, (0, false) if invalid or empty vault
     /// @param vault The vault address to query
     /// @return rate The exchange rate scaled by 1e18
     /// @return valid Whether the rate is valid (false if totalSupply is 0)

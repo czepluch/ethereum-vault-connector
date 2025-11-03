@@ -8,7 +8,9 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 
 /// @notice Interface for querying ERC20 token balances
 interface IERC20 {
-    function balanceOf(address account) external view returns (uint256);
+    function balanceOf(
+        address account
+    ) external view returns (uint256);
 }
 
 /// @notice Interface for EVault cash accounting
@@ -52,20 +54,15 @@ contract VaultAccountingIntegrityAssertion is Assertion {
     /// @notice Specifies which EVC functions this assertion should intercept
     /// @dev Registers triggers for batch, call, and controlCollateral operations
     function triggers() external view override {
+        registerCallTrigger(this.assertionBatchAccountingIntegrity.selector, IEVC.batch.selector);
+        registerCallTrigger(this.assertionCallAccountingIntegrity.selector, IEVC.call.selector);
         registerCallTrigger(
-            this.assertionBatchAccountingIntegrity.selector, IEVC.batch.selector
-        );
-        registerCallTrigger(
-            this.assertionCallAccountingIntegrity.selector, IEVC.call.selector
-        );
-        registerCallTrigger(
-            this.assertionControlCollateralAccountingIntegrity.selector,
-            IEVC.controlCollateral.selector
+            this.assertionControlCollateralAccountingIntegrity.selector, IEVC.controlCollateral.selector
         );
     }
 
-    /// @notice Monitors EVC.batch() calls to validate accounting integrity for all vaults in the batch
-    /// @dev Extracts all vault addresses from batch items and validates accounting once per unique vault
+    /// @notice Validates accounting integrity for batch operations
+    /// @dev Validates each unique vault in batch once
     function assertionBatchAccountingIntegrity() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory batchCalls = ph.getCallInputs(address(evc), IEVC.batch.selector);
@@ -115,30 +112,29 @@ contract VaultAccountingIntegrityAssertion is Assertion {
         }
     }
 
-    /// @notice Monitors EVC.call() to validate accounting integrity for the target vault
-    /// @dev Extracts the target contract from call parameters and validates accounting
+    /// @notice Validates accounting integrity for call operations
+    /// @dev Validates target contract from call parameters
     function assertionCallAccountingIntegrity() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory callInputs = ph.getCallInputs(address(evc), IEVC.call.selector);
 
         for (uint256 i = 0; i < callInputs.length; i++) {
-            (address targetContract,,,,) =
-                abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
+            (address targetContract,,,,) = abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
 
             if (targetContract.code.length == 0) continue;
             validateVaultAccountingIntegrity(targetContract);
         }
     }
 
-    /// @notice Monitors EVC.controlCollateral() to validate accounting integrity for the collateral vault
-    /// @dev Extracts the target collateral from controlCollateral parameters and validates accounting
+    /// @notice Validates accounting integrity for controlCollateral operations
+    /// @dev Validates target collateral from controlCollateral parameters
     function assertionControlCollateralAccountingIntegrity() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
-        PhEvm.CallInputs[] memory controlInputs =
-            ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
+        PhEvm.CallInputs[] memory controlInputs = ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
 
         for (uint256 i = 0; i < controlInputs.length; i++) {
-            // controlCollateral signature: (address targetCollateral, address onBehalfOfAccount, uint256 value, bytes data)
+            // controlCollateral signature: (address targetCollateral, address onBehalfOfAccount, uint256 value, bytes
+            // data)
             (address targetCollateral,,,) = abi.decode(controlInputs[i].input, (address, address, uint256, bytes));
 
             if (targetCollateral.code.length == 0) continue;
@@ -146,10 +142,11 @@ contract VaultAccountingIntegrityAssertion is Assertion {
         }
     }
 
-    /// @notice Validates that a vault's actual balance is at least its internal cash accounting
-    /// @dev Performs a simple check: balance >= cash
-    /// @param vault The vault address to validate accounting for
-    function validateVaultAccountingIntegrity(address vault) internal {
+    /// @notice Validates vault's actual balance >= internal cash accounting
+    /// @param vault The vault address to validate
+    function validateVaultAccountingIntegrity(
+        address vault
+    ) internal {
         // Fork to post-transaction state and check: balance >= cash
         ph.forkPostTx();
 
@@ -158,10 +155,7 @@ contract VaultAccountingIntegrityAssertion is Assertion {
             try IEVaultCash(vault).cash() returns (uint256 cash) {
                 uint256 balance = IERC20(asset).balanceOf(vault);
 
-                require(
-                    balance >= cash,
-                    "VaultAccountingIntegrityAssertion: Balance < cash"
-                );
+                require(balance >= cash, "VaultAccountingIntegrityAssertion: Balance < cash");
             } catch {
                 // No cash() function, skip this vault (not an EVault)
                 return;

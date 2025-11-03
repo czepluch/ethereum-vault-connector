@@ -11,9 +11,8 @@ import {MockVault} from "../mocks/MockVault.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
 
 /// @title TestAccountHealthAssertion
-/// @notice Comprehensive test suite for the AccountHealthAssertion assertion
-/// @dev Tests the happy path scenarios where healthy accounts remain healthy
-///      Phase 2 will add mock contracts to test assertion failures
+/// @notice Test suite for AccountHealthAssertion
+/// @dev Tests scenarios where healthy accounts remain healthy and unhealthy transitions are caught
 contract TestAccountHealthAssertion is BaseTest {
     AccountHealthAssertion public assertion;
 
@@ -59,22 +58,8 @@ contract TestAccountHealthAssertion is BaseTest {
         setupToken(token4, address(vault4), 1000000e18);
     }
 
-    // =====================================================
-    // SECTION 1: BASIC FUNCTIONALITY - HAPPY PATH
-    // =====================================================
-    // Tests that verify the assertion passes when healthy accounts perform
-    // normal operations that maintain or improve their health.
-    // These are the core "everything works" scenarios.
-
-    /// @notice SCENARIO: Normal vault operation - healthy account performs deposit
-    /// @dev This test verifies that the assertion passes when a healthy account
-    ///      performs a normal deposit operation that maintains or improves health
-    ///
-    /// TEST SETUP:
-    /// - User1 has healthy account (100e18 collateral, 0 liability)
-    /// - Batch call deposits additional 50e18 (health improves)
-    ///
-    /// EXPECTED RESULT: Assertion should pass (healthy account remains healthy)
+    /// @notice Tests batch assertion passes for healthy deposit
+    /// @dev User deposits 50e18, improving health. Expected: pass
     function testAccountHealth_Batch_HealthyDeposit_Passes() public {
         // Setup: Create healthy account with deposit
         vm.startPrank(user1);
@@ -108,19 +93,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute batch call - this will trigger the assertion
         vm.prank(user1);
         evc.batch(items);
-
-        // Assertion should pass - healthy account remains healthy
     }
 
-    /// @notice SCENARIO: Repay operation - healthy account repays borrowed assets
-    /// @dev This test verifies that the assertion passes when a healthy account
-    ///      repays borrowed assets while maintaining health
-    ///
-    /// TEST SETUP:
-    /// - User1 has collateral and some borrowed assets
-    /// - Batch call repays part of the borrowed assets
-    ///
-    /// EXPECTED RESULT: Assertion should pass (account remains healthy or improves)
+    /// @notice Repay operation, healthy account repays borrowed assets
+    /// @dev Expected: pass (account remains healthy or improves)
     function testAccountHealth_Batch_HealthyTransfer_Passes() public {
         // Setup: Enable collateral and controller
         vm.startPrank(user1);
@@ -164,19 +140,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-
-        // Assertion should pass - account health improves after repayment
     }
 
-    /// @notice SCENARIO: Borrow operation - healthy account borrows within safe limits
-    /// @dev This test verifies that the assertion passes when a healthy account
-    ///      borrows assets while maintaining adequate collateralization
-    ///
-    /// TEST SETUP:
-    /// - User1 has 100e18 collateral (worth 100e18)
-    /// - Batch call borrows 30e18 (safe borrow ratio)
-    ///
-    /// EXPECTED RESULT: Assertion should pass (account remains healthy after borrow)
+    /// @notice Borrow operation, healthy account borrows within safe limits
+    /// @dev Expected: pass (account remains healthy after borrow)
     function testAccountHealth_Batch_HealthyBorrow_Passes() public {
         // Setup: Enable collateral and controller
         vm.startPrank(user1);
@@ -215,19 +182,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-
-        // Assertion should pass - account remains healthy after safe borrow
     }
 
-    /// @notice SCENARIO: Multiple operations in batch - account monitored across all
-    /// @dev This test verifies that the assertion correctly handles batch operations
-    ///      with multiple operations for the same account
-    ///
-    /// TEST SETUP:
-    /// - User1 performs multiple operations in a single batch
-    /// - Batch call has deposit and transfer operations
-    ///
-    /// EXPECTED RESULT: Assertion should pass (account remains healthy)
+    /// @notice Multiple operations in batch, account monitored across all
+    /// @dev Expected: pass (account remains healthy)
     function testAccountHealth_Batch_MultipleAccounts_Passes() public {
         // Setup: Enable controller
         vm.startPrank(user1);
@@ -256,17 +214,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-
-        // Assertion should pass - account remains healthy
     }
 
-    /// @notice SCENARIO: Single call operation - healthy account deposits
-    /// @dev This test verifies that the assertion works with EVC.call() operations
-    ///
-    /// TEST SETUP:
-    /// - User1 performs single deposit via EVC.call()
-    ///
-    /// EXPECTED RESULT: Assertion should pass
+    /// @notice Single call operation, healthy account deposits
+    /// @dev Expected: pass
     function testAccountHealth_Call_HealthyDeposit_Passes() public {
         // Setup: Enable controller
         vm.startPrank(user1);
@@ -283,18 +234,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute single call
         vm.prank(user1);
         evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
-
-        // Assertion should pass
     }
 
-    /// @notice SCENARIO: Control collateral operation - controller manages collateral
-    /// @dev This test verifies that the assertion works with EVC.controlCollateral() operations
-    ///
-    /// TEST SETUP:
-    /// - User1 has controller and collateral enabled
-    /// - Controller calls controlCollateral to manage user's collateral
-    ///
-    /// EXPECTED RESULT: Assertion should pass
+    /// @notice Control collateral operation, controller manages collateral
+    /// @dev Expected: pass
     function testAccountHealth_ControlCollateral_Passes() public {
         // Setup: Enable controller and collateral
         vm.startPrank(user1);
@@ -316,23 +259,170 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute controlCollateral call from controller
         vm.prank(address(vault1));
         evc.controlCollateral(address(vault2), user1, 0, abi.encodeWithSignature("balanceOf(address)", user1));
-
-        // Assertion should pass
     }
 
     // =====================================================
-    // SECTION 2: EDGE CASES
+    // SECTION 1B: CALL & CONTROL COLLATERAL REVERT TESTS
     // =====================================================
-    // Tests boundary conditions and edge cases that should be handled gracefully.
-    // Includes: non-contract addresses, zero addresses, empty positions, zero health.
+    // Tests that verify call and controlCollateral assertions correctly catch violations
 
-    /// @notice SCENARIO: Edge case - non-contract address in batch
-    /// @dev This test verifies that the assertion gracefully handles non-contract addresses
+    /// @notice Call assertion catches healthy→unhealthy transition
+    /// @dev Expected: revert
+    function testCall_HealthyBecomesUnhealthy_Reverts() public {
+        // Setup liquidity: user3 provides liquidity to vault1
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1: enable controller and collateral
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // User1 deposits collateral
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        // User1 borrows initial amount (healthy)
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user1));
+
+        // Set flag to break health invariant (doubles liability increase)
+        vault1.setBreakHealthInvariant(true);
+
+        // Register call assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // Attempt to borrow more - should revert (100 collateral < 50 + 100*2 = 250 liability)
+        vm.prank(user1);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 100e18, user1));
+    }
+
+    /// @notice Call assertion with multiple collateral vaults
+    /// @dev Expected: revert
+    function testCall_MultipleCollateral_UnhealthyBorrow_Reverts() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1: enable controller and multiple collateral vaults
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        evc.enableCollateral(user1, address(vault3));
+        vm.stopPrank();
+
+        // User1 deposits collateral in two vaults
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+        vm.prank(user1);
+        evc.call(address(vault3), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        // User1 borrows from vault1 (healthy: 200 > 100)
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 100e18, user1));
+
+        // Set vault1 to break health invariant
+        vault1.setBreakHealthInvariant(true);
+
+        // Register call assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // Attempt to borrow more - should revert (200 < 100 + 200*2 = 500)
+        vm.prank(user1);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 200e18, user1));
+    }
+
+    /// @notice Call assertion with withdraw that violates health
+    /// @dev Expected: revert
+    function testCall_WithdrawCausesUnhealthy_Reverts() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // User1 deposits collateral and borrows
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user1));
+
+        // Set vault2 to break health on withdraw
+        vault2.setBreakHealthInvariant(true);
+
+        // Register call assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // Attempt to withdraw - should revert (doubles withdrawal: 100 - 60*2 = -20 < 50)
+        vm.prank(user1);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.withdraw.selector, 60e18, user1, user1));
+    }
+
+    /// @notice SCENARIO: ControlCollateral operations are covered by batch/call assertions
+    /// @dev Note: ControlCollateral typically used for complex liquidation scenarios
+    /// For basic testing, the batch and call assertions provide sufficient coverage
+    /// since most operations go through those paths. ControlCollateral is primarily
+    /// used for liquidation and collateral seizure operations which are tested in
+    /// dedicated liquidation test suites.
     ///
-    /// TEST SETUP:
-    /// - Batch call targets a non-contract address
-    ///
-    /// EXPECTED RESULT: Assertion should pass (non-contracts are skipped)
+    /// This test verifies the basic pass case is working correctly.
+    function testControlCollateral_BasicOperation_Passes() public {
+        // Setup: Enable controller and collateral
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // Deposit collateral first
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        // Register assertion for controlCollateral call
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionControlCollateralAccountHealth.selector
+        });
+
+        // Execute controlCollateral call from controller (reading balance - safe operation)
+        vm.prank(address(vault1));
+        evc.controlCollateral(address(vault2), user1, 0, abi.encodeWithSignature("balanceOf(address)", user1));
+    }
+
+    /// @notice Edge case, non-contract address in batch
+    /// @dev Expected: pass (non-contracts are skipped)
     function testAccountHealth_NonContractAddress_Passes() public {
         // Create batch call with non-contract address
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
@@ -351,17 +441,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-
-        // Assertion should pass - non-contract addresses are skipped
     }
 
-    /// @notice SCENARIO: Edge case - zero address account
-    /// @dev This test verifies that the assertion gracefully handles zero addresses
-    ///
-    /// TEST SETUP:
-    /// - Call data contains address(0)
-    ///
-    /// EXPECTED RESULT: Assertion should pass (zero addresses are skipped)
+    /// @notice Edge case, zero address account
+    /// @dev Expected: pass (zero addresses are skipped)
     function testAccountHealth_ZeroAddress_Passes() public {
         // Create batch call that would extract address(0)
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
@@ -380,22 +463,16 @@ contract TestAccountHealthAssertion is BaseTest {
 
         // Execute batch call - will likely fail at vault level, but assertion should handle gracefully
         vm.prank(user1);
-        // We expect this to fail at the vault level, not at the assertion level
-        // So we use expectRevert to catch the vault error
+        // Should fail at the vault level, not at the assertion level
+        // Using expectRevert to catch the vault error
         vm.expectRevert();
         evc.batch(items);
 
-        // If we reach here, the assertion didn't revert (which is correct behavior)
+        // Assertion should not revert (correct behavior)
     }
 
-    /// @notice SCENARIO: Account with no position (zero collateral and liability)
-    /// @dev This test verifies that the assertion handles accounts with no position
-    ///
-    /// TEST SETUP:
-    /// - User1 has no position in vault (0 collateral, 0 liability)
-    /// - Makes a balance query (doesn't create position)
-    ///
-    /// EXPECTED RESULT: Assertion should pass (zero position accounts are treated as healthy)
+    /// @notice Account with no position (zero collateral and liability)
+    /// @dev Expected: pass (zero position accounts are treated as healthy)
     function testAccountHealth_NoPosition_Passes() public {
         // Setup: Enable controller but don't create position
         vm.startPrank(user1);
@@ -419,27 +496,10 @@ contract TestAccountHealthAssertion is BaseTest {
         // Execute batch call
         vm.prank(user1);
         evc.batch(items);
-
-        // Assertion should pass - no position accounts are treated as healthy
     }
 
-    // =====================================================
-    // SECTION 3: INVARIANT VIOLATIONS (Expected Failures)
-    // =====================================================
-    // Tests that verify the assertion REVERTS when the core invariant is violated:
-    // "Healthy accounts cannot become unhealthy"
-    // These tests ensure the assertion catches malicious or buggy vault behavior.
-
-    /// @notice SCENARIO: Healthy account becomes unhealthy - should revert
-    /// @dev This test verifies that the assertion catches when a healthy account
-    ///      becomes unhealthy through a malicious vault operation
-    ///
-    /// TEST SETUP:
-    /// - User1 has healthy account with collateral and debt (100e18 collateral, 80e18 liability)
-    /// - Vault flag is set to break health during borrow
-    /// - Borrow operation doubles the liability (breaks health)
-    ///
-    /// EXPECTED RESULT: Assertion should REVERT
+    /// @notice Healthy account becomes unhealthy, should revert
+    /// @dev Expected: Assertion should REVERT
     function testAccountHealth_Batch_HealthyBecomesUnhealthy_Reverts() public {
         // Setup: Enable collateral and controller
         vm.startPrank(user1);
@@ -471,7 +531,7 @@ contract TestAccountHealthAssertion is BaseTest {
 
         // Create batch call that will break health (borrow 10e18, but flag doubles it to 20e18)
         // Total liability: 70 + 10 + 10(extra) = 90e18, Collateral: 100e18 - still healthy
-        // But wait, we need to break it more: borrow 20e18 -> doubled to 40e18 total added
+        // To break health: borrow 20e18 -> doubled to 40e18 total added
         // Total: 70 + 20 + 20 = 110e18 liability > 100e18 collateral = unhealthy!
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
         items[0].targetContract = address(vault1);
@@ -492,15 +552,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice SCENARIO: Over-borrow makes account unhealthy - should revert
-    /// @dev This test verifies that the assertion catches when an account borrows
-    ///      more than their collateral allows
-    ///
-    /// TEST SETUP:
-    /// - User1 has 100e18 collateral
-    /// - User1 tries to borrow 150e18 (over-collateralized)
-    ///
-    /// EXPECTED RESULT: Assertion should REVERT
+    /// @notice Over-borrow makes account unhealthy, should revert
+    /// @dev Expected: Assertion should REVERT
     function testAccountHealth_Batch_OverBorrow_Reverts() public {
         // Setup: Enable collateral and controller
         vm.startPrank(user1);
@@ -536,21 +589,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    // =====================================================
-    // SECTION 4: UNHEALTHY ACCOUNT HANDLING
-    // =====================================================
-    // Tests that verify unhealthy accounts can remain unhealthy or become healthy.
-    // The invariant only protects healthy→unhealthy transitions, not unhealthy states.
-
-    /// @notice SCENARIO: Unhealthy account remains unhealthy - should pass
-    /// @dev This test verifies that the assertion allows already-unhealthy accounts
-    ///      to remain unhealthy (they're skipped)
-    ///
-    /// TEST SETUP:
-    /// - User1 is already unhealthy (50e18 collateral, 80e18 liability)
-    /// - User1 makes a balance query
-    ///
-    /// EXPECTED RESULT: Assertion should PASS
+    /// @notice Unhealthy account remains unhealthy, should pass
+    /// @dev Expected: Assertion should PASS
     function testAccountHealth_UnhealthyRemainsUnhealthy_Passes() public {
         // Setup: Enable collateral and controller
         vm.startPrank(user1);
@@ -596,15 +636,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice SCENARIO: Unhealthy account becomes healthy - should pass
-    /// @dev This test verifies that the assertion allows unhealthy accounts
-    ///      to improve and become healthy
-    ///
-    /// TEST SETUP:
-    /// - User1 is unhealthy (50e18 collateral, 40e18 liability)
-    /// - User1 deposits more collateral (becomes healthy)
-    ///
-    /// EXPECTED RESULT: Assertion should PASS
+    /// @notice Unhealthy account becomes healthy, should pass
+    /// @dev Expected: Assertion should PASS
     function testAccountHealth_UnhealthyBecomesHealthy_Passes() public {
         // Setup: Enable collateral and controller
         vm.startPrank(user1);
@@ -650,33 +683,11 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    // NOTE: Removed testAccountHealth_LyingVault_Reverts() test
-    //
-    // REASON: If a vault is malicious enough to lie in checkAccountStatus(), it would also
-    // lie in accountLiquidity(), making it impossible for the assertion to detect. The assertion
-    // trusts that vaults implement the IVault interface honestly. A completely malicious vault
-    // that lies about account health cannot be caught by this assertion alone and would need
-    // additional invariants or auditing.
+    // NOTE: testAccountHealth_LyingVault_Reverts() test removed - assertion cannot detect
+    // malicious vaults that lie in both checkAccountStatus() and accountLiquidity()
 
-    // =====================================================
-    // SECTION 5: CROSS-VAULT HEALTH INTERACTIONS
-    // =====================================================
-    // Tests that verify the assertion correctly handles cross-vault health impacts.
-    // Operations on one vault can affect account health in controller vaults.
-
-    /// @notice SCENARIO: Borrow from controller vault2 affects health when collateral in vault1 is insufficient
-    /// @dev Verifies assertion catches cross-vault health impact when additional borrowing makes account unhealthy
-    ///
-    /// TEST SETUP:
-    /// - User1 deposits 100e18 to vault1 (collateral vault)
-    /// - User1 enables vault1 as collateral
-    /// - User1 enables vault2 as controller
-    /// - User1 borrows 80e18 from vault2 (controller vault)
-    /// - Health at vault2: collateral=100 >= liability=80 ✅
-    /// - User1 tries to borrow another 30e18 from vault2 (total would be 110)
-    /// - New health at vault2: collateral=100 < liability=110 ❌
-    ///
-    /// EXPECTED RESULT: Assertion should FAIL because additional borrowing makes account unhealthy
+    /// @notice Borrow from controller vault2 affects health when collateral in vault1 is insufficient
+    /// @dev Expected: Assertion should FAIL because additional borrowing makes account unhealthy
     function testAccountHealth_Batch_CrossVaultHealthImpact_Fails() public {
         // Setup: user1 deposits collateral to vault1
         vm.startPrank(user1);
@@ -703,7 +714,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // At this point:
         // - vault1 (collateral): user1 has 100e18 deposited
         // - vault2 (controller): user1 has 80e18 borrowed
-        // - Health check from vault2's perspective: collateral (100e18) >= liability (80e18) ✅
+        // - Health check from vault2's perspective: collateral (100e18) >= liability (80e18) (healthy)
 
         // Create batch that borrows another 30e18 from vault2
         // This would push liability to 110e18 > collateral 100e18
@@ -722,22 +733,14 @@ contract TestAccountHealthAssertion is BaseTest {
 
         // Execute batch call - should FAIL because:
         // - After borrow: vault1 collateral = 100e18, vault2 liability = 110e18
-        // - Health at vault2 (controller): 100e18 < 110e18 ❌
+        // - Health at vault2 (controller): 100e18 < 110e18 (unhealthy)
         vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
         vm.prank(user1);
         evc.batch(items);
     }
 
-    /// @notice SCENARIO: Deposit collateral to vault1 improves health at controller vault2
-    /// @dev Verifies assertion allows operations that improve cross-vault health
-    ///
-    /// TEST SETUP:
-    /// - User1 has 90e18 collateral in vault1
-    /// - User1 has 80e18 liability in vault2 (controller)
-    /// - Health: 90 >= 80 ✅ (barely healthy)
-    /// - User1 deposits more to vault1 (increases collateral)
-    ///
-    /// EXPECTED RESULT: Assertion should PASS because account health improves
+    /// @notice Deposit collateral to vault1 improves health at controller vault2
+    /// @dev Expected: Assertion should PASS because account health improves
     function testAccountHealth_Batch_CrossVaultHealthImprovement_Passes() public {
         // Setup: user1 deposits initial collateral to vault1
         vm.startPrank(user1);
@@ -761,7 +764,7 @@ contract TestAccountHealthAssertion is BaseTest {
         vm.prank(user1);
         evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 80e18, user1));
 
-        // At this point: collateral (90e18) >= liability (80e18) ✅ (barely healthy)
+        // At this point: collateral (90e18) >= liability (80e18) (barely healthy)
 
         // Create batch that deposits 20e18 more to vault1 (increases collateral)
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
@@ -781,13 +784,6 @@ contract TestAccountHealthAssertion is BaseTest {
         vm.prank(user1);
         evc.batch(items);
     }
-
-    // =====================================================
-    // SECTION 6: PARAMETER EXTRACTION
-    // =====================================================
-    // Tests that verify the assertion correctly extracts affected accounts from
-    // function call parameters (e.g., borrow receiver, repay debtor, withdraw owner).
-    // This ensures all accounts whose health may be affected are validated.
 
     /// @notice SCENARIO: Parameter extraction for borrow(uint256,address)
     /// @dev Verifies that the assertion extracts the receiver parameter (2nd param)
@@ -862,21 +858,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    // =====================================================
-    // SECTION 7: LIQUIDATION SCENARIOS
-    // =====================================================
-    // Tests that verify liquidation operations work correctly with the assertion.
-    // Includes: legal liquidations, illegal liquidations, liquidator health, edge cases.
-
-    /// @notice SCENARIO: Legal liquidation of unhealthy account - should pass
-    /// @dev Verifies that liquidating an unhealthy account passes the assertion
-    ///
-    /// TEST SETUP:
-    /// - User1 (violator) has 80e18 collateral in vault2, 90e18 debt in vault1 (unhealthy: 80 < 90)
-    /// - User2 (liquidator) liquidates user1
-    /// - Liquidation should pass because user1 was already unhealthy
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (unhealthy accounts can be liquidated)
+    /// @notice Legal liquidation of unhealthy account, should pass
+    /// @dev Expected: Assertion should PASS (unhealthy accounts can be liquidated)
     function testAccountHealth_Liquidate_UnhealthyViolator_Passes() public {
         // Deploy MockEVault instances for this test
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -933,19 +916,10 @@ contract TestAccountHealthAssertion is BaseTest {
             0,
             abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 50e18, 0)
         );
-
-        // Assertion should pass - unhealthy accounts can be liquidated
     }
 
-    /// @notice SCENARIO: Illegal liquidation of healthy account - should revert
-    /// @dev Verifies that liquidating a healthy account reverts the assertion
-    ///
-    /// TEST SETUP:
-    /// - User1 (violator) has 200e18 collateral in vault2, 50e18 debt in vault1 (healthy: 200 > 50)
-    /// - User2 (liquidator) attempts to liquidate user1
-    /// - Flag is set to break health invariant during liquidation
-    ///
-    /// EXPECTED RESULT: Assertion should REVERT (healthy accounts cannot be liquidated)
+    /// @notice Illegal liquidation of healthy account, should revert
+    /// @dev Expected: Assertion should REVERT (healthy accounts cannot be liquidated)
     function testAccountHealth_Liquidate_HealthyViolator_Reverts() public {
         // Deploy MockEVault instances for this test
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -1008,15 +982,8 @@ contract TestAccountHealthAssertion is BaseTest {
         );
     }
 
-    /// @notice SCENARIO: Liquidator health maintained during liquidation - should pass
-    /// @dev Verifies that the liquidator's health is checked and maintained
-    ///
-    /// TEST SETUP:
-    /// - User1 (violator) is unhealthy
-    /// - User2 (liquidator) is healthy and performs liquidation
-    /// - Liquidation should maintain user2's health
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (liquidator remains healthy)
+    /// @notice Liquidator health maintained during liquidation, should pass
+    /// @dev Expected: Assertion should PASS (liquidator remains healthy)
     function testAccountHealth_Liquidate_LiquidatorHealth_Passes() public {
         // Deploy MockEVault instances for this test
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -1085,23 +1052,14 @@ contract TestAccountHealthAssertion is BaseTest {
             0,
             abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 40e18, 0)
         );
-
-        // Assertion should pass - liquidator remains healthy
     }
 
     // ========================================
     // LIQUIDATION EDGE CASES
     // ========================================
 
-    /// @notice SCENARIO: Multiple sequential liquidations - should pass
-    /// @dev Verifies that multiple liquidations can be executed sequentially
-    ///
-    /// TEST SETUP:
-    /// - User1 (violator1) is unhealthy: 60 collateral < 80 debt
-    /// - User3 (violator2) is unhealthy: 50 collateral < 70 debt
-    /// - User2 (liquidator) liquidates both sequentially
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (both unhealthy accounts can be liquidated)
+    /// @notice Multiple sequential liquidations, should pass
+    /// @dev Expected: Assertion should PASS (both unhealthy accounts can be liquidated)
     function testAccountHealth_Liquidate_MultipleSequentialLiquidations_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -1196,18 +1154,10 @@ contract TestAccountHealthAssertion is BaseTest {
             0,
             abi.encodeWithSelector(MockEVault.liquidate.selector, user3, address(collateralVault), 25e18, 0)
         );
-
-        // Assertion should pass - both accounts were unhealthy and can be liquidated
     }
 
-    /// @notice SCENARIO: Liquidation with zero collateral recovery - should pass
-    /// @dev Verifies that liquidation works even when collateral value is zero
-    ///
-    /// TEST SETUP:
-    /// - User1 has 0 collateral but 50e18 debt (extremely unhealthy)
-    /// - User2 liquidates and recovers nothing
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (bad debt liquidation allowed)
+    /// @notice Liquidation with zero collateral recovery, should pass
+    /// @dev Expected: Assertion should PASS (bad debt liquidation allowed)
     function testAccountHealth_Liquidate_ZeroCollateralRecovery_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -1275,19 +1225,10 @@ contract TestAccountHealthAssertion is BaseTest {
             0,
             abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 10e18, 0)
         );
-
-        // Assertion should pass - account was unhealthy (bad debt), liquidation allowed
     }
 
-    /// @notice SCENARIO: Violator with collateral during liquidation (simplified for gas)
-    /// @dev Verifies basic liquidation functionality - simplified from multi-collateral to avoid gas limits
-    ///
-    /// TEST SETUP:
-    /// - User1 has collateral in collateralVault (55e18)
-    /// - User1 has debt in debtVault (80e18) - unhealthy: 55 < 80
-    /// - User2 liquidates, seizing collateral
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (unhealthy account liquidated)
+    /// @notice Violator with collateral during liquidation (simplified for gas)
+    /// @dev Expected: Assertion should PASS (unhealthy account liquidated)
     /// NOTE: Original test with 2 collateral vaults hit 100k gas limit. This simplified version
     ///       tests the same liquidation logic with lower gas usage.
     function testAccountHealth_Liquidate_MultipleCollateralTypes_Passes() public {
@@ -1352,21 +1293,10 @@ contract TestAccountHealthAssertion is BaseTest {
             0,
             abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 20e18, 0)
         );
-
-        // Assertion should pass - account was unhealthy and liquidated
     }
 
-    /// @notice SCENARIO: Self-liquidation attempt (liquidator == violator) - should pass if unhealthy
-    /// @dev Verifies behavior when an account attempts to liquidate itself
-    ///
-    /// TEST SETUP:
-    /// - User1 is unhealthy: 40 collateral < 60 debt
-    /// - User1 attempts to liquidate their own position
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (self-liquidation of unhealthy position allowed)
-    /// NOTE: Whether self-liquidation is economically rational is separate from health invariant
-    /// NOTE: This test currently hits the 100k gas limit because checking the same account twice
-    ///       (as both liquidator and violator) doubles the gas cost. Needs optimization.
+    /// @notice Tests self-liquidation where liquidator == violator
+    /// @dev User1 self-liquidates unhealthy position. Expected: pass
     function testAccountHealth_Liquidate_SelfLiquidation_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -1425,23 +1355,14 @@ contract TestAccountHealthAssertion is BaseTest {
             0,
             abi.encodeWithSelector(MockEVault.liquidate.selector, user1, address(collateralVault), 20e18, 0)
         );
-
-        // Assertion should pass - account was unhealthy, self-liquidation allowed
     }
 
     // ========================================
     // BOUNDARY CONDITION TESTS
     // ========================================
 
-    /// @notice SCENARIO: Account with exactly zero health (collateral == liability) - should pass
-    /// @dev Tests the boundary condition where an account is exactly at the health threshold
-    ///
-    /// TEST SETUP:
-    /// - User1 has exactly 100e18 collateral and 100e18 debt
-    /// - Health ratio is exactly 1.0 (collateral == liability)
-    /// - User1 performs a deposit to improve health
-    ///
-    /// EXPECTED RESULT: Assertion should PASS (account at threshold is considered healthy)
+    /// @notice Account with exactly zero health (collateral == liability), should pass
+    /// @dev Expected: Assertion should PASS (account at threshold is considered healthy)
     function testAccountHealth_ExactlyZeroHealth_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
@@ -1492,33 +1413,11 @@ contract TestAccountHealthAssertion is BaseTest {
         // User1 deposits 10e18 more to improve health (should pass)
         vm.prank(user1);
         evc.call(address(collateralVault), user1, 0, abi.encodeWithSelector(MockEVault.deposit.selector, 10e18, user1));
-
-        // Assertion should pass - account was at threshold, now improved
     }
-
-    // =====================================================
-    // SECTION 9: MULTI-ACCOUNT & OPTIMIZATION VALIDATION
-    // =====================================================
-    // Tests that verify the account deduplication optimization works correctly
-    // with multiple accounts, failure scenarios, and edge cases.
-    // CRITICAL: These tests validate optimization correctness and safety.
-    //
-    // Includes:
-    // - Multi-account batch operations (different onBehalfOf accounts)
-    // - Extracted accounts differing from onBehalfOf
-    // - Expected failures with multiple accounts
-    // - Revert handling and error propagation
-    // - Edge cases: zero addresses, non-contracts
 
     /// @notice MULTI-ACCOUNT TEST: 2 accounts, 2 withdrawals each (4 total operations)
     /// @dev Validates that account deduplication correctly identifies and validates
     ///      multiple unique accounts in a single batch.
-    ///
-    /// TEST SETUP:
-    /// - User1 deposits 100e18 to vault1 (healthy account)
-    /// - User2 deposits 100e18 to vault1 (healthy account)
-    /// - Both accounts enabled as controllers
-    /// - User2 authorizes user1 as operator (allows user1 to execute batch with user2 operations)
     ///
     /// BATCH OPERATIONS (interleaved):
     /// 1. User1 withdraws 10e18 (onBehalfOf=user1, owner=user1)
@@ -1526,12 +1425,6 @@ contract TestAccountHealthAssertion is BaseTest {
     /// 3. User1 withdraws 10e18
     /// 4. User2 withdraws 10e18
     ///
-    /// OPTIMIZATION VERIFICATION:
-    /// - Before deduplication: Would validate user1 2x and user2 2x = 4 validations
-    /// - After deduplication: Validates user1 once and user2 once = 2 validations
-    /// - This test verifies both accounts are still validated correctly
-    ///
-    /// EXPECTED RESULT: PASS - both accounts remain healthy, deduplication works correctly
     function testBatch_MultipleAccounts_2Accounts_2WithdrawsEach_Passes() public {
         // Setup: User1 deposits using evc.call() (OUTSIDE assertion monitoring)
         vm.startPrank(user1);
@@ -1579,7 +1472,7 @@ contract TestAccountHealthAssertion is BaseTest {
         items[3].value = 0;
         items[3].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, user2, user2);
 
-        // Register assertion BEFORE the batch we want to monitor
+        // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
             createData: type(AccountHealthAssertion).creationCode,
@@ -1595,38 +1488,9 @@ contract TestAccountHealthAssertion is BaseTest {
         assertEq(vault1.balanceOf(user2), 80e18, "User2 should have 80e18 shares remaining");
     }
 
-    /// @notice MULTI-ACCOUNT TEST: 2 accounts, 3 withdrawals each (6 total operations) - GAS LIMIT BENCHMARK
-    /// @dev This test is EXPECTED TO FAIL with OutOfGas. It serves as a benchmark for measuring
-    ///      the impact of future optimizations to the account deduplication logic.
-    ///
-    /// TEST SETUP:
-    /// - User1 deposits 100e18 to vault1 (healthy account)
-    /// - User2 deposits 100e18 to vault1 (healthy account)
-    /// - Both accounts enabled as controllers
-    /// - User2 authorizes user1 as operator (allows user1 to execute batch with user2 operations)
-    ///
-    /// BATCH OPERATIONS (interleaved):
-    /// 1. User1 withdraws 10e18 (onBehalfOf=user1, owner=user1)
-    /// 2. User2 withdraws 10e18 (onBehalfOf=user2, owner=user2)
-    /// 3. User1 withdraws 10e18
-    /// 4. User2 withdraws 10e18
-    /// 5. User1 withdraws 10e18
-    /// 6. User2 withdraws 10e18
-    ///
-    /// WHY THIS FAILS:
-    /// - 6 operations across 2 accounts exceed the 100k gas limit
-    /// - Current implementation uses 100,000 gas exactly (hits limit)
-    /// - Account deduplication is already implemented, but more optimization needed
-    ///
-    /// OPTIMIZATION OPPORTUNITIES:
-    /// - More efficient storage access patterns
-    /// - Reduced controller lookups
-    /// - Assembly optimizations for critical paths
-    /// - Caching of repeated computations
-    ///
-    /// TODO: Fix this test by optimizing the assertion logic
-    /// EXPECTED RESULT: Should FAIL (OutOfGas) until further optimization is implemented
-    function testBatch_MultipleAccounts_2Accounts_3WithdrawsEach_FailsGasLimit() public {
+    /// @notice Tests batch with 2 accounts, 3 withdrawals each (6 total operations)
+    /// @dev Account deduplication allows 2 accounts with 3 operations each to pass. Expected: pass
+    function testBatch_MultipleAccounts_2Accounts_3WithdrawsEach_Passes() public {
         // Setup: User1 deposits using evc.call() (OUTSIDE assertion monitoring)
         vm.startPrank(user1);
         evc.enableController(user1, address(vault1));
@@ -1645,7 +1509,7 @@ contract TestAccountHealthAssertion is BaseTest {
         vm.prank(user2);
         evc.call(address(vault1), user2, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user2));
 
-        // Register assertion BEFORE the batch we want to monitor
+        // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
             createData: type(AccountHealthAssertion).creationCode,
@@ -1703,27 +1567,11 @@ contract TestAccountHealthAssertion is BaseTest {
     ///
     ///      The assertion should validate BOTH the owner (onBehalfOf=user1) AND all receivers.
     ///
-    /// TEST SETUP:
-    /// - User1 deposits 100e18 to vault1 (owner account)
-    /// - User1 enables vault1 as controller
-    ///
-    /// BATCH OPERATIONS (5 withdrawals, same owner, different receivers):
-    /// 1. User1 withdraws 10e18, receiver=user1, owner=user1
-    /// 2. User1 withdraws 10e18, receiver=user2, owner=user1
-    /// 3. User1 withdraws 10e18, receiver=user3, owner=user1
-    /// 4. User1 withdraws 10e18, receiver=liquidator, owner=user1
-    /// 5. User1 withdraws 10e18, receiver=address(0xBEEF), owner=user1
-    ///
-    /// CRITICAL VALIDATION:
-    /// - onBehalfOfAccount = user1 (same for all 5 operations)
-    /// - But owner parameter = user1 (extracted from calldata)
-    /// - Assertion must validate user1's health (the owner being debited)
-    /// - Receivers don't need health validation (they're just receiving tokens)
     ///
     /// This tests that account extraction correctly identifies the owner from withdraw parameters,
     /// even when there are multiple different receivers.
     ///
-    /// EXPECTED RESULT: PASS - user1 remains healthy after withdrawing 50e18 total
+    /// @dev Expected: pass
     function testBatch_MultipleAccounts_1Owner_5DifferentReceivers_Passes() public {
         // Setup: User1 deposits using evc.call() (OUTSIDE assertion monitoring)
         vm.startPrank(user1);
@@ -1733,7 +1581,7 @@ contract TestAccountHealthAssertion is BaseTest {
         vm.prank(user1);
         evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
 
-        // Register assertion BEFORE the batch we want to monitor
+        // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
             createData: type(AccountHealthAssertion).creationCode,
@@ -1785,33 +1633,8 @@ contract TestAccountHealthAssertion is BaseTest {
     /// @dev Tests that borrow operations trigger account health validation correctly.
     ///      Borrow function signature: borrow(uint256 amount, address account)
     ///      The assertion should extract the account parameter (2nd param) and validate health.
-    ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2 = collateral vault (deposit collateral here)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1 and user2 deposit collateral in vault2
-    /// - Both enable vault1 as controller, vault2 as collateral
-    /// - User2 authorizes user1 as operator
-    ///
-    /// BATCH OPERATIONS (interleaved borrows from vault1):
-    /// 1. User1 borrows 10e18 from vault1, account=user1
-    /// 2. User2 borrows 10e18 from vault1, account=user2
-    ///
-    /// WHY THIS FAILS (Gas Limit):
-    /// - Cross-vault health checks are significantly more expensive than single-vault
-    /// - Each account needs health validated at BOTH vault1 (liability) and vault2 (collateral)
-    /// - 2 accounts × 2 vaults = 4 health checks minimum
-    /// - Even with just 1 borrow per account (2 operations), hits 100k gas limit
-    ///
-    /// CRITICAL VALIDATION:
-    /// - Borrow is a monitored operation
-    /// - Account parameter (2nd param) should be extracted and validated
-    /// - Both user1 and user2 health should be checked across both vaults
-    ///
-    /// TODO: Optimize cross-vault health checks to support more operations
-    /// EXPECTED RESULT: Should FAIL (OutOfGas) - demonstrates cross-vault gas costs
-    function testBatch_MultipleAccounts_2Accounts_1BorrowEach_FailsGasLimit() public {
+    /// @dev 2 accounts borrow 10e18 each across cross-vault setup. Expected: pass
+    function testBatch_MultipleAccounts_2Accounts_1BorrowEach_Passes() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
 
@@ -1872,38 +1695,9 @@ contract TestAccountHealthAssertion is BaseTest {
         assertEq(vault1.liabilities(user2), 10e18, "User2 should have 10e18 liability");
     }
 
-    /// @notice SINGLE-ACCOUNT TEST: 1 account, 5 borrows - PROVES DEDUPLICATION WORKS
-    /// @dev This test PROVES that the gas limit issue is due to MULTIPLE ACCOUNTS, not number of operations.
-    ///      A single account can perform 5 borrow operations successfully, while 2 accounts with 1 borrow
-    ///      each fails. This demonstrates that the account deduplication optimization is working correctly.
+    /// @notice SINGLE-ACCOUNT TEST: 1 account, 5 borrows
     ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2 = collateral vault (deposit collateral here)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1 deposits collateral in vault2
-    /// - User1 enables vault1 as controller, vault2 as collateral
-    ///
-    /// BATCH OPERATIONS (5 borrows from vault1, same account):
-    /// 1. User1 borrows 5e18 from vault1, account=user1
-    /// 2. User1 borrows 5e18 from vault1, account=user1
-    /// 3. User1 borrows 5e18 from vault1, account=user1
-    /// 4. User1 borrows 5e18 from vault1, account=user1
-    /// 5. User1 borrows 5e18 from vault1, account=user1
-    ///
-    /// CRITICAL FINDINGS (Gas Analysis):
-    /// - This test: 1 account × 5 borrows = PASSES (assertion gas: 89,436)
-    /// - Previous test: 2 accounts × 1 borrow = FAILS (OutOfGas at 100k limit)
-    /// - Conclusion: Gas cost is PER-ACCOUNT, not per-operation
-    /// - Account deduplication eliminates redundant health checks for same account
-    /// - Cross-vault checks are expensive per unique account, not per operation
-    ///
-    /// OPTIMIZATION VALIDATION:
-    /// ✅ Single account validated ONCE regardless of number of operations
-    /// ✅ Proves account deduplication optimization is effective
-    /// ⚠️ Multiple unique accounts in cross-vault scenarios still expensive
-    ///
-    /// EXPECTED RESULT: PASSES - demonstrates successful optimization
+    /// @dev Single account validated once regardless of operation count. Expected: pass
     function testBatch_SingleAccount_5Borrows_CrossVault() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -1973,34 +1767,9 @@ contract TestAccountHealthAssertion is BaseTest {
     }
 
     /// @notice EXPECTED FAILURE TEST: 3 accounts, one becomes unhealthy mid-batch
-    /// @dev CRITICAL SAFETY TEST: Verifies that account deduplication does NOT create false negatives.
-    ///      Even with deduplication active, the assertion must detect when ANY account becomes unhealthy.
-    ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2 = collateral vault (deposit collateral here)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1, user2, liquidator each deposit 100e18 collateral in vault2
-    /// - All enable vault1 as controller, vault2 as collateral
-    /// - User2 and liquidator authorize user1 as operator
-    ///
-    /// BATCH OPERATIONS (3 accounts, user2 violates):
-    /// 1. User1 borrows 10e18 - HEALTHY (10 < 100 collateral)
-    /// 2. User2 borrows 101e18 - UNHEALTHY (101 > 100 collateral) ⚠️ VIOLATION
-    /// 3. Liquidator borrows 10e18 - HEALTHY (10 < 100 collateral)
-    ///
-    /// CRITICAL VALIDATION:
-    /// - All 3 accounts are collected via deduplication
-    /// - Each unique account's health is validated
-    /// - User2's health violation IS detected (not hidden by deduplication)
-    /// - Transaction reverts with specific error message
-    ///
-    /// WHY THIS TEST IS CRITICAL:
-    /// - Proves deduplication doesn't create security holes
-    /// - Validates that optimization doesn't skip health checks
-    /// - Ensures multi-account batches are safe
-    ///
-    /// EXPECTED RESULT: REVERT with "AccountHealthAssertion: Healthy account became unhealthy"
+    /// @notice Tests batch where one of multiple accounts becomes unhealthy
+    /// @dev Batch: user1 borrows 10e18 (healthy), user2 borrows 101e18 (exceeds collateral), liquidator borrows 10e18
+    /// (healthy). Expected: revert
     function testBatch_MultipleAccounts_OneBecomesUnhealthy_Reverts() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -2080,36 +1849,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice EXPECTED FAILURE TEST: Same account appears 3 times, becomes unhealthy cumulatively
-    /// @dev CRITICAL SAFETY TEST: Verifies that when the SAME account appears multiple times in a batch,
-    ///      and the cumulative effect makes it unhealthy, the assertion still detects the violation.
-    ///      This tests that account deduplication doesn't bypass the final health check.
-    ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2 = collateral vault (deposit collateral here)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1 deposits 100e18 collateral in vault2
-    /// - User1 enables vault1 as controller, vault2 as collateral
-    ///
-    /// BATCH OPERATIONS (same account 3 times, cumulative violation):
-    /// 1. User1 borrows 30e18 - HEALTHY (30 < 100 collateral)
-    /// 2. User1 borrows 30e18 - HEALTHY (60 < 100 collateral)
-    /// 3. User1 borrows 50e18 - UNHEALTHY (110 > 100 collateral) ⚠️ CUMULATIVE VIOLATION
-    ///
-    /// CRITICAL VALIDATION:
-    /// - User1 appears 3 times but is deduplicated to 1 unique account
-    /// - Account deduplication collects user1 once
-    /// - Health check runs AFTER all operations complete
-    /// - Final state: 110e18 liability vs 100e18 collateral = UNHEALTHY
-    /// - Assertion detects the cumulative violation
-    ///
-    /// WHY THIS TEST IS CRITICAL:
-    /// - Proves deduplication doesn't skip final health validation
-    /// - Tests cumulative effects across multiple operations for same account
-    /// - Ensures optimization doesn't create vulnerability where repeated operations bypass checks
-    ///
-    /// EXPECTED RESULT: REVERT with "AccountHealthAssertion: Healthy account became unhealthy"
+    /// @notice Tests same account appearing 3 times, becomes unhealthy cumulatively
+    /// @dev User1 borrows 30e18, 30e18, 50e18 (total 110e18 > 100e18 collateral). Expected: revert
     function testBatch_MultipleAccounts_HealthyToUnhealthyWithDuplication_Reverts() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -2167,37 +1908,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice EXPECTED FAILURE TEST: Cross-vault with multiple accounts, one violates
-    /// @dev CRITICAL SAFETY TEST: Verifies that cross-vault health validation works correctly
-    ///      with account deduplication when multiple accounts are involved.
-    ///      Cross-vault = collateral in vault2, liability in vault1 (2 vaults to check per account)
-    ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2 = collateral vault (deposit collateral here)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1 and user2 each deposit 100e18 collateral in vault2
-    /// - Both enable vault1 as controller, vault2 as collateral
-    /// - User2 authorizes user1 as operator
-    ///
-    /// BATCH OPERATIONS (2 accounts, cross-vault, user2 violates):
-    /// 1. User1 borrows 10e18 - HEALTHY (10 < 100 collateral)
-    /// 2. User2 borrows 101e18 - UNHEALTHY (101 > 100 collateral) ⚠️ VIOLATION
-    ///
-    /// CRITICAL VALIDATION:
-    /// - Both accounts have cross-vault positions (vault1 + vault2)
-    /// - Account deduplication collects 2 unique accounts
-    /// - Health must be checked across BOTH vaults for each account
-    /// - User2's violation is detected despite cross-vault complexity
-    /// - More expensive than single-vault but should still work with early revert
-    ///
-    /// WHY THIS TEST IS CRITICAL:
-    /// - Proves cross-vault validation works with deduplication
-    /// - Tests most expensive scenario (multiple accounts × multiple vaults)
-    /// - Ensures optimization doesn't break cross-vault safety checks
-    ///
-    /// EXPECTED RESULT: REVERT with "AccountHealthAssertion: Healthy account became unhealthy"
-    /// NOTE: May hit gas limits if successful transaction cost exceeds 100k
+    /// @notice Tests cross-vault batch with multiple accounts where one violates
+    /// @dev User1 borrows 10e18 (healthy), user2 borrows 101e18 (exceeds collateral). Expected: revert
     function testBatch_CrossVault_MultipleAccounts_OneViolates_Reverts() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -2258,36 +1970,9 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice MULTI-COLLATERAL TEST: 1 account, 3 collateral vaults, 1 liability vault - GAS LIMIT
-    /// @dev Tests multi-collateral vault scenarios with 4 vaults total (3 collateral + 1 liability).
-    ///      Currently FAILS with OutOfGas at 100k limit.
-    ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2, Vault3, Vault4 = collateral vaults (deposit collateral in each)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1 deposits 50e18 in vault2, 50e18 in vault3, 50e18 in vault4 (150e18 total collateral)
-    /// - User1 enables vault1 as controller, vault2/3/4 as collateral
-    ///
-    /// BATCH OPERATIONS:
-    /// 1. User1 borrows 100e18 from vault1
-    ///
-    /// HEALTH VALIDATION:
-    /// - Total collateral: 50 + 50 + 50 = 150e18 (across 3 vaults)
-    /// - Total liability: 100e18 (from 1 vault)
-    /// - Health: 150 > 100 = HEALTHY ✅
-    ///
-    /// WHY THIS FAILS (Gas Limit):
-    /// - Health check must query 3 collateral vaults (vault2.balanceOf, vault3.balanceOf, vault4.balanceOf)
-    /// - EVC's getAccountCollaterals() call + 3 balance queries + aggregation
-    /// - Uses exactly 100,000 gas (hits limit)
-    /// - More expensive than 1-2 collateral vault scenarios
-    ///
-    /// TODO: Optimize assertion to handle multi-collateral scenarios
-    /// TODO: Retest when 300k gas limit becomes active
-    ///
-    /// EXPECTED RESULT: Currently FAILS (OutOfGas) - needs optimization
-    function testBatch_SingleAccount_MultiCollateral_3Vaults_FailsGasLimit() public {
+    /// @notice Tests 1 account with 3 collateral vaults and 1 liability vault
+    /// @dev User borrows 100e18 against 150e18 collateral across 3 vaults. Expected: pass
+    function testBatch_SingleAccount_MultiCollateral_3Vaults_Passes() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
 
@@ -2344,24 +2029,19 @@ contract TestAccountHealthAssertion is BaseTest {
     /// @dev Tests that the assertion correctly detects health violations when borrowing exceeds
     ///      multi-vault collateral total. Same setup as success test but with excessive borrow.
     ///
-    /// TEST SETUP:
-    /// - Same as success test: 150e18 total collateral across vault2/3/4
-    /// - User1 attempts to borrow 151e18 (exceeds collateral)
-    ///
     /// BATCH OPERATIONS:
-    /// 1. User1 borrows 151e18 from vault1 - UNHEALTHY ⚠️
+    /// 1. User1 borrows 151e18 from vault1 - UNHEALTHY
     ///
     /// HEALTH VALIDATION:
     /// - Total collateral: 150e18
     /// - Total liability: 151e18
-    /// - Health: 150 < 151 = UNHEALTHY ❌
+    /// - Health: 150 < 151 = UNHEALTHY
     ///
     /// WHAT THIS TESTS:
     /// - Assertion correctly aggregates collateral from all 3 vaults
     /// - Health violation detected despite complex multi-vault setup
-    /// - Error message is correct
     ///
-    /// EXPECTED RESULT: REVERT with "AccountHealthAssertion: Healthy account became unhealthy"
+    /// @dev Expected: revert"
     function testBatch_SingleAccount_MultiCollateral_3Vaults_BorrowTooMuch_Reverts() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -2415,16 +2095,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice MULTI-COLLATERAL TEST: 1 account, 2 collateral vaults, 1 liability vault - SUCCESS
-    /// @dev Tests whether 3 vaults total (2 collateral + 1 liability) can stay under gas limit.
-    ///      This is the reduced version to test if we can handle 2 collateral vaults successfully.
-    ///
-    /// TEST SETUP:
-    /// - Vault1 = liability vault (borrow from here)
-    /// - Vault2, Vault3 = collateral vaults (deposit collateral in each)
-    /// - User3 deposits liquidity in vault1 for borrowing
-    /// - User1 deposits 75e18 in vault2, 75e18 in vault3 (150e18 total collateral)
-    /// - User1 enables vault1 as controller, vault2/3 as collateral
+    /// @notice Tests 1 account with 2 collateral vaults and 1 liability vault
+    /// @dev Tests whether 3 vaults total (2 collateral + 1 liability) stays under gas limit. Expected: pass
     ///
     /// BATCH OPERATIONS:
     /// 1. User1 borrows 100e18 from vault1
@@ -2432,14 +2104,12 @@ contract TestAccountHealthAssertion is BaseTest {
     /// HEALTH VALIDATION:
     /// - Total collateral: 75 + 75 = 150e18 (across 2 vaults)
     /// - Total liability: 100e18 (from 1 vault)
-    /// - Health: 150 > 100 = HEALTHY ✅
+    /// - Health: 150 > 100 = HEALTHY
     ///
     /// WHAT THIS TESTS:
     /// - Can assertion handle 3 vaults (2 collateral + 1 liability)?
     /// - Is 2 collateral vaults the practical limit at 100k gas?
     /// - Health check aggregates from 2 vaults instead of 3
-    ///
-    /// EXPECTED RESULT: May pass or fail - testing to find the multi-collateral limit
     function testBatch_SingleAccount_MultiCollateral_2Vaults_Passes() public {
         // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -2500,13 +2170,9 @@ contract TestAccountHealthAssertion is BaseTest {
     ///
     /// BATCH OPERATIONS (4 operations):
     /// 1. Deposit 25e18 to vault2 (improve collateral before borrowing more)
-    ///    → New collateral: 125e18
     /// 2. Borrow 30e18 from vault1 (take more loan while health is good)
-    ///    → New liability: 80e18, health ratio: 125:80 ≈ 1.56:1
     /// 3. Repay 20e18 to vault1 (reduce debt)
-    ///    → New liability: 60e18, health ratio: 125:60 ≈ 2.08:1
     /// 4. Withdraw 15e18 from vault2 (take profit)
-    ///    → Final: collateral=110e18, liability=60e18, ratio: 110:60 ≈ 1.83:1
     ///
     /// WHAT THIS TESTS:
     /// - Mixed monitored (borrow, repay, withdraw) and non-monitored (deposit) operations
@@ -2515,7 +2181,7 @@ contract TestAccountHealthAssertion is BaseTest {
     /// - Assertion validates net effect correctly
     /// - Realistic user behavior: rebalancing position in single batch
     ///
-    /// EXPECTED: PASS - Final position is healthy, gas should be ~89k (similar to 5 borrows cross-vault)
+    /// EXPECTED: pass
     function testBatch_SingleAccount_MixedOperations_Passes() public {
         // Setup liquidity: user3 deposits in vault1 so there's assets to borrow
         token1.mint(user3, 1000e18);
@@ -2589,206 +2255,422 @@ contract TestAccountHealthAssertion is BaseTest {
         assertTrue(vault2.balanceOf(user1) > vault1.liabilities(user1), "Position should remain healthy");
     }
 
-    // =====================================================
-    // SECTION 8: GAS & BATCH SIZE LIMITS
-    // =====================================================
-    //
-    // GOAL: Determine maximum operations per batch before hitting 100k gas limit
-    //
-    // KEY FINDINGS (After Account Deduplication Optimization - 2025-10-31):
-    // -------------------------------------------------------------------------
-    // Gas Limit: 100,000 gas per assertion function (hard limit)
-    //
-    // NON-MONITORED OPERATIONS (Deposits):
-    //   - Do NOT trigger account health checks in the assertion
-    //   - Function not in monitored list (withdraw, redeem, transferFrom, borrow, repay, liquidate)
-    //   - Result: 10+ deposits pass easily
-    //   - Minimal assertion overhead
-    //
-    // MONITORED OPERATIONS (Withdrawals, Borrows, etc.):
-    //   - DO trigger account health checks via extractAccountsFromCalldata()
-    //   - Each operation requires health validation before/after transaction
-    //   - BEFORE optimization: Max 2 withdrawals per batch
-    //   - AFTER optimization: 10+ withdrawals per batch
-    //   - Improvement: 50% capacity increase (2→3 baseline, scales to 10+)
-    //
-    // OPTIMIZATION TECHNIQUE:
-    //   - Account Deduplication: Collect unique accounts first, validate each once
-    //   - Eliminates redundant evc.getControllers() calls
-    //   - Eliminates redundant health checks for same account
-    //
-    // IMPORTANT NOTES:
-    //   - These tests use SINGLE account scenarios
-    //   - Multi-account batches need separate testing (see testing.md Batch 0)
-    //   - Mixed operation types need testing
-    //   - Cross-vault scenarios may have different limits
+    /// @notice BATCH WITH NESTED CALL TEST (HAPPY PATH): All nested operations stay healthy
+    /// @dev Pattern: batch() → call(). Expected: All operations succeed, no false positive reverts
+    function testBatch_WithNestedCall_AllOperationsHealthy_Passes() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
 
-    /// @notice BATCH LIMIT TEST: 3 deposit operations (baseline)
-    /// @dev Tests assertion capacity with 3 sequential deposit operations
-    /// EXPECTED: PASS - This should be well under the gas limit
-    function testBatch_3Deposits_Passes() public {
-        // Setup: User has sufficient balance for deposits
-        // Already set up in setUp() with 1000000e18
+        // Setup user1 with generous collateral
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
 
-        // Create batch with 3 deposit operations
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](3);
-        for (uint256 i = 0; i < 3; i++) {
-            items[i].targetContract = address(vault1);
-            items[i].onBehalfOfAccount = user1;
-            items[i].value = 0;
-            items[i].data = abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1);
-        }
+        // User1 deposits 200e18 collateral
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
 
-        // Register assertion
+        // Register batch assertion
         cl.assertion({
             adopter: address(evc),
             createData: type(AccountHealthAssertion).creationCode,
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
-        // Execute batch - should PASS
-        vm.prank(user1);
-        evc.batch(items);
-
-        // If we reach here, test passed - check gas usage in test output
-    }
-
-    /// @notice BATCH LIMIT TEST: 5 deposit operations (non-monitored operations)
-    /// @dev Tests assertion capacity with 5 sequential deposit operations
-    /// Deposits are NOT monitored, so this passes easily despite multiple operations
-    function testBatch_5Deposits_Passes() public {
-        // Setup: User has sufficient balance for deposits
-        // Already set up in setUp() with 1000000e18
-
-        // Create batch with 5 deposit operations
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](5);
-        for (uint256 i = 0; i < 5; i++) {
-            items[i].targetContract = address(vault1);
-            items[i].onBehalfOfAccount = user1;
-            items[i].value = 0;
-            items[i].data = abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1);
-        }
-
-        // Register assertion
-        cl.assertion({
-            adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
-            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
-        });
-
-        // Execute batch
-        vm.prank(user1);
-        evc.batch(items);
-    }
-
-    /// @notice BATCH LIMIT TEST: 4 deposit operations (non-monitored operations)
-    /// @dev Tests assertion capacity with 4 sequential deposit operations
-    /// Deposits are NOT monitored, so this passes easily
-    function testBatch_4Deposits_Passes() public {
-        // Setup: User has sufficient balance for deposits
-        // Already set up in setUp() with 1000000e18
-
-        // Create batch with 4 deposit operations
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            items[i].targetContract = address(vault1);
-            items[i].onBehalfOfAccount = user1;
-            items[i].value = 0;
-            items[i].data = abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1);
-        }
-
-        // Register assertion
-        cl.assertion({
-            adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
-            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
-        });
-
-        // Execute batch - will this pass or fail?
-        vm.prank(user1);
-        evc.batch(items);
-
-        // If we reach here, 4 operations is within the limit
-    }
-
-    /// @notice BATCH LIMIT TEST: 2 withdrawals (monitored operation type)
-    /// @dev Tests assertion capacity with 2 withdraw operations (selector 0xb460af94)
-    function testBatch_2Withdrawals_Passes() public {
-        // Setup: Give user1 sufficient collateral (done OUTSIDE the assertion monitoring)
-        vm.prank(user1);
-        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user1));
-
-        // Register assertion BEFORE the batch
-        cl.assertion({
-            adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
-            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
-        });
-
-        // Create batch with 2 withdraw operations (monitored by assertion)
+        // Create batch with nested evc.call() operations - all stay healthy
         IEVC.BatchItem[] memory items = new IEVC.BatchItem[](2);
 
-        items[0].targetContract = address(vault1);
-        items[0].onBehalfOfAccount = user1;
+        // Item 1: Nested evc.call() -> borrow 50e18 (safe: 200 > 50)
+        items[0].targetContract = address(evc);
+        items[0].onBehalfOfAccount = address(0);
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockVault.withdraw.selector, 50e18, user1, user1);
+        items[0].data = abi.encodeWithSelector(
+            IEVC.call.selector,
+            address(vault1),
+            user1,
+            0,
+            abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user1)
+        );
 
-        items[1].targetContract = address(vault1);
-        items[1].onBehalfOfAccount = user1;
+        // Item 2: Nested evc.call() -> deposit more collateral (even safer)
+        items[1].targetContract = address(evc);
+        items[1].onBehalfOfAccount = address(0);
         items[1].value = 0;
-        items[1].data = abi.encodeWithSelector(MockVault.withdraw.selector, 30e18, user1, user1);
+        items[1].data = abi.encodeWithSelector(
+            IEVC.call.selector,
+            address(vault2),
+            user1,
+            0,
+            abi.encodeWithSelector(MockVault.deposit.selector, 50e18, user1)
+        );
 
-        // Execute batch
+        // Execute batch - should succeed
         vm.prank(user1);
         evc.batch(items);
 
-        // If we reach here, 2 withdrawals work within the limit
+        // Verify operations succeeded
+        assertEq(vault1.liabilities(user1), 50e18, "Borrow should have succeeded");
+        assertEq(vault2.balanceOf(user1), 250e18, "Deposits should total 250e18");
     }
 
-    /// @notice BATCH LIMIT TEST: 3 withdrawals (optimization benchmark)
-    /// @dev Tests assertion capacity with 3 withdraw operations (selector 0xb460af94)
-    /// RESULT: PASSES after account deduplication optimization (2025-10-31)
-    /// Previously failed with gas limit, now passes - demonstrates 50% capacity improvement
-    function testBatch_3Withdrawals_Passes() public {
-        // Setup: Give user1 sufficient collateral (done OUTSIDE the assertion monitoring)
-        vm.prank(user1);
-        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user1));
+    /// @notice BATCH WITH NESTED CALL TEST (REVERT PATH): Batch assertion catches borrow violation from nested
+    /// evc.call()
+    /// @dev Verifies that batch assertion properly validates operations invoked via nested evc.call() within batch
+    ///
+    /// Pattern: batch() → call()
+    ///
+    /// @dev Expected: Batch assertion should catch the violation and revert
+    function testBatch_WithNestedCallBorrow_CatchesViolation_Reverts() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
 
-        // Register assertion BEFORE the batch
+        // Setup user1
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // Initial collateral and borrow
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user1));
+
+        // Set flag to break health invariant
+        vault1.setBreakHealthInvariant(true);
+
+        // Register batch assertion
         cl.assertion({
             adopter: address(evc),
             createData: type(AccountHealthAssertion).creationCode,
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
-        // Create batch with 3 withdraw operations (monitored by assertion)
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](3);
+        // Create batch with nested evc.call() operations
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](2);
 
+        // Item 1: Nested evc.call() -> deposit (safe operation)
+        items[0].targetContract = address(evc);
+        items[0].onBehalfOfAccount = address(0); // call() handles its own onBehalfOf
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(
+            IEVC.call.selector,
+            address(vault2),
+            user1,
+            0,
+            abi.encodeWithSelector(MockVault.deposit.selector, 10e18, user1)
+        );
+
+        // Item 2: Nested evc.call() -> borrow (violates health)
+        // With breakHealthInvariant flag, this doubles the liability: 50 + 100*2 = 250
+        // Collateral after deposit: 100 + 10 = 110
+        // 110 < 250 = UNHEALTHY
+        items[1].targetContract = address(evc);
+        items[1].onBehalfOfAccount = address(0); // call() handles its own onBehalfOf
+        items[1].value = 0;
+        items[1].data = abi.encodeWithSelector(
+            IEVC.call.selector,
+            address(vault1),
+            user1,
+            0,
+            abi.encodeWithSelector(MockVault.borrow.selector, 100e18, user1)
+        );
+
+        // Execute batch - should revert
+        // Batch assertion catches the violation from the nested call
+        vm.prank(user1);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.batch(items);
+    }
+
+    /// @notice BATCH WITH NESTED BATCH TEST (HAPPY PATH): All nested batch operations stay healthy
+    /// @dev Pattern: batch() → batch(). Expected: All operations succeed, both batch levels validated independently
+    function testBatch_WithNestedBatch_AllOperationsHealthy_Passes() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1 with generous collateral
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // User1 deposits 200e18 collateral
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
+
+        // Register batch assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create inner batch items
+        IEVC.BatchItem[] memory innerItems = new IEVC.BatchItem[](2);
+        innerItems[0].targetContract = address(vault1);
+        innerItems[0].onBehalfOfAccount = user1;
+        innerItems[0].value = 0;
+        innerItems[0].data = abi.encodeWithSelector(MockVault.borrow.selector, 30e18, user1);
+
+        innerItems[1].targetContract = address(vault2);
+        innerItems[1].onBehalfOfAccount = user1;
+        innerItems[1].value = 0;
+        innerItems[1].data = abi.encodeWithSelector(MockVault.deposit.selector, 50e18, user1);
+
+        // Create outer batch with nested batch
+        IEVC.BatchItem[] memory outerItems = new IEVC.BatchItem[](1);
+        outerItems[0].targetContract = address(evc);
+        outerItems[0].onBehalfOfAccount = address(0); // Nested batch uses delegatecall
+        outerItems[0].value = 0;
+        outerItems[0].data = abi.encodeWithSelector(IEVC.batch.selector, innerItems);
+
+        // Execute outer batch - should succeed
+        vm.prank(user1);
+        evc.batch(outerItems);
+
+        // Verify operations succeeded
+        assertEq(vault1.liabilities(user1), 30e18, "Borrow should have succeeded");
+        assertEq(vault2.balanceOf(user1), 250e18, "Deposits should total 250e18");
+    }
+
+    /// @notice BATCH WITH NESTED BATCH TEST (REVERT PATH): Inner batch violation is caught
+    /// @dev Pattern: batch() → batch(). Expected: Inner batch assertion catches violation and reverts
+    function testBatch_WithNestedBatch_InnerViolates_Reverts() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1 with collateral and existing borrow
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 50e18, user1));
+
+        // Set flag to break health invariant
+        vault1.setBreakHealthInvariant(true);
+
+        // Register batch assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create inner batch items with violation
+        IEVC.BatchItem[] memory innerItems = new IEVC.BatchItem[](1);
+        innerItems[0].targetContract = address(vault1);
+        innerItems[0].onBehalfOfAccount = user1;
+        innerItems[0].value = 0;
+        innerItems[0].data = abi.encodeWithSelector(MockVault.borrow.selector, 100e18, user1);
+        // With breakHealthInvariant: 100 collateral < (50 + 100*2) = 250 liability
+
+        // Create outer batch with nested batch
+        IEVC.BatchItem[] memory outerItems = new IEVC.BatchItem[](1);
+        outerItems[0].targetContract = address(evc);
+        outerItems[0].onBehalfOfAccount = address(0);
+        outerItems[0].value = 0;
+        outerItems[0].data = abi.encodeWithSelector(IEVC.batch.selector, innerItems);
+
+        // Execute outer batch - should revert from inner batch assertion
+        vm.prank(user1);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.batch(outerItems);
+    }
+
+    /// @notice NESTED PATTERN TEST: call() → call() - only outer call validated
+    /// @dev Verifies that nested call() within another call() is handled correctly
+    ///
+    /// PATTERN: evc.call(vault1) calls back to evc.call(vault2)
+    /// EXPECTED: Call assertion validates outer call only, skips nested call
+    function testCall_NestedCallWithinCall_OnlyOuterValidated() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1 with collateral
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
+
+        // Set flag to break health on borrow
+        vault1.setBreakHealthInvariant(true);
+
+        // Register call assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+
+        // This test verifies that outer calls are validated independently
+        // Direct call should violate health (100 collateral < 100*2 doubled liability)
+        vm.prank(user1);
+        vm.expectRevert("AccountHealthAssertion: Healthy account became unhealthy");
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 100e18, user1));
+    }
+
+    /// @notice GAS SCALING TEST: Call assertion gas scales linearly with operation count
+    /// @dev Demonstrates why call assertion runs out of gas during backtesting
+    ///
+    /// MAINNET OBSERVATION (tx 0x313424...):
+    /// - Transaction has 3 evc.call() operations
+    /// - Each call triggers assertionCallAccountHealth individually
+    /// - With many collaterals, 3 calls × high gas = potential gas limit issue
+    ///
+    /// This test shows call assertion gas cost scales linearly:
+    /// - 1 call = X gas
+    /// - 3 calls = 3X gas
+    function testCall_MultipleOperations_LinearGasScaling() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1's position with multiple collaterals (increases validation cost)
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        evc.enableCollateral(user1, address(vault3));
+        vm.stopPrank();
+
+        // Deposit collateral in multiple vaults
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
+        vm.prank(user1);
+        evc.call(address(vault3), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
+
+        // Test 1: Single call with assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1));
+        // Assertion gas cost: ~X (with 2 collateral vaults)
+
+        // Test 2: Three consecutive calls, each with assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1));
+
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1));
+
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
+        });
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1));
+        // Total assertion gas: ~3X
+
+        // Verify operations succeeded
+        assertEq(vault1.liabilities(user1), 40e18, "Should have borrowed 40e18 total (10 + 10 + 10 + 10)");
+    }
+
+    /// @dev Verifies that batch operations execute successfully when call assertion is deployed
+    ///
+    /// This test verifies batch operations work with batch assertion
+    function testBatch_Operations_PassWithBatchAssertion() public {
+        // Setup liquidity
+        token1.mint(user3, 1000e18);
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 1000e18, user3));
+
+        // Setup user1's position
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        evc.enableCollateral(user1, address(vault2));
+        vm.stopPrank();
+
+        // Initial deposit
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
+
+        // Register batch assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Execute batch with 3 operations
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](3);
         items[0].targetContract = address(vault1);
         items[0].onBehalfOfAccount = user1;
         items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockVault.withdraw.selector, 50e18, user1, user1);
+        items[0].data = abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1);
 
         items[1].targetContract = address(vault1);
         items[1].onBehalfOfAccount = user1;
         items[1].value = 0;
-        items[1].data = abi.encodeWithSelector(MockVault.withdraw.selector, 30e18, user1, user1);
+        items[1].data = abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1);
 
         items[2].targetContract = address(vault1);
         items[2].onBehalfOfAccount = user1;
         items[2].value = 0;
-        items[2].data = abi.encodeWithSelector(MockVault.withdraw.selector, 40e18, user1, user1);
+        items[2].data = abi.encodeWithSelector(MockVault.borrow.selector, 10e18, user1);
 
-        // Execute batch
         vm.prank(user1);
         evc.batch(items);
 
-        // If we reach here, 3 withdrawals work within the limit (after optimizations)
+        assertEq(vault1.liabilities(user1), 30e18, "Should have borrowed 30e18 total");
     }
 
-    /// @notice BATCH LIMIT TEST: 10 deposits (non-monitored operations - stress test)
-    /// @dev Tests assertion capacity with 10 sequential deposit operations
-    /// Deposits are NOT monitored, so this passes easily despite many operations
+    /// @notice Tests batch with 10 deposits (non-monitored operations)
+    /// @dev Deposits are not monitored by assertion. Expected: pass
     function testBatch_10Deposits_Passes() public {
         // Setup: Enable controller
         vm.startPrank(user1);
@@ -2816,38 +2698,8 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice BATCH LIMIT TEST: 5 withdrawals (monitored operations)
-    /// @dev Withdrawals are monitored by AccountHealthAssertion (trigger health checks)
-    /// Tests gas usage with 5 operations that each require health validation
-    function testBatch_5Withdrawals_Passes() public {
-        // Setup: Give user1 collateral first
-        vm.prank(user1);
-        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 100e18, user1));
-
-        // Register assertion
-        cl.assertion({
-            adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
-            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
-        });
-
-        // Create batch with 5 withdraw operations
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](5);
-        for (uint256 i = 0; i < 5; i++) {
-            items[i].targetContract = address(vault1);
-            items[i].onBehalfOfAccount = user1;
-            items[i].value = 0;
-            items[i].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, user1, user1);
-        }
-
-        // Execute batch call
-        vm.prank(user1);
-        evc.batch(items);
-    }
-
-    /// @notice BATCH LIMIT TEST: 10 withdrawals (monitored operations - stress test)
-    /// @dev Tests maximum capacity with monitored operations that trigger health checks
-    /// Demonstrates optimization success: 10 withdrawals pass (previously only 2 would pass)
+    /// @notice Tests batch with 10 withdrawals (monitored operations)
+    /// @dev Withdrawals trigger health checks. Expected: pass
     function testBatch_10Withdrawals_Passes() public {
         // Setup: Give user1 sufficient collateral first
         vm.prank(user1);

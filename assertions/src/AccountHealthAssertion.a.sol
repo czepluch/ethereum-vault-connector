@@ -68,61 +68,105 @@ contract AccountHealthAssertion is Assertion {
         registerCallTrigger(this.assertionControlCollateralAccountHealth.selector, IEVC.controlCollateral.selector);
     }
 
-    /// @notice Assertion for batch operations
-    /// @dev INVARIANT: Healthy accounts cannot become unhealthy through vault operations
+    /// @notice Validates account health for batch operations
+    /// @dev Intercepts EVC batch calls and ensures healthy accounts remain healthy
     ///
-    /// HOW IT WORKS:
-    /// 1. Intercepts all EVC batch calls (primary way vaults are called)
-    /// 2. Extracts onBehalfOfAccount from each batch operation
-    /// 3. For each account, checks health status before/after the transaction at:
-    ///    a) The vault that was directly touched in the batch
-    ///    b) All controller vaults for that account (to catch cross-vault health impacts)
-    /// 4. Reverts if a healthy account becomes unhealthy
+    /// Account Identification:
+    /// - onBehalfOfAccount from batch items
+    /// - Additional accounts extracted from function parameters (withdraw owner, redeem owner,
+    ///   transferFrom sender, borrow receiver, repay debtor, liquidate violator)
     ///
-    /// CROSS-VAULT HEALTH CHECKS:
-    /// When a collateral vault is modified (e.g., withdraw), the controller vault's view of
-    /// account health changes. The controller evaluates all enabled collaterals together via
-    /// checkAccountStatus(). Therefore, we must check health at controllers even if they
-    /// weren't directly called in the batch.
+    /// Validation Strategy:
+    /// - Collects all unique accounts and vaults from batch items
+    /// - Validates each account once at touched vaults and their controller vaults
+    /// - Checks health before/after transaction using checkAccountStatus()
+    /// - Reverts if a healthy account becomes unhealthy
     ///
-    /// ACCOUNT IDENTIFICATION:
-    /// - Checks onBehalfOfAccount (the authenticated account for the operation)
-    /// - Extracts additional accounts from function parameters (withdraw owner, redeem owner, transferFrom sender,
-    /// borrow receiver, repay debtor, liquidate violator)
-    /// - This provides comprehensive coverage of accounts whose health may be affected by vault operations
-    ///
-    /// ACCOUNT HEALTH CHECK:
-    /// - Uses controller vault's checkAccountStatus() if available
-    /// - Falls back to accountLiquidity() comparison (collateralValue >= liabilityValue)
-    /// - Skips accounts that were already unhealthy before the transaction
-    ///
-    /// OPTIMIZATION: Account Deduplication
-    /// Instead of validating each account multiple times (once per batch item), we:
-    /// 1. Collect all unique accounts from ALL batch items first
-    /// 2. Validate each unique account only once
-    /// This eliminates redundant evc.getControllers() calls and health checks
+    /// Cross-Vault Health:
+    /// Operations on collateral vaults affect controller vault health checks since
+    /// checkAccountStatus() evaluates all enabled collaterals together
     function assertionBatchAccountHealth() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
-        // Get all batch calls to analyze
-        PhEvm.CallInputs[] memory batchCalls = ph.getCallInputs(address(evc), IEVC.batch.selector);
+        // Get all batch calls to analyze (including nested batches via delegatecall)
+        PhEvm.CallInputs[] memory batchCalls = ph.getAllCallInputs(address(evc), IEVC.batch.selector);
 
         // Process all batch calls to ensure complete coverage
         for (uint256 i = 0; i < batchCalls.length; i++) {
             // Decode batch call parameters directly: (BatchItem[] items)
             IEVC.BatchItem[] memory items = abi.decode(batchCalls[i].input, (IEVC.BatchItem[]));
 
-            // PHASE 1 & 2 COMBINED: Collect all unique accounts AND vaults in single pass
-            // We use a simple array + linear search since batch sizes are typically small (< 10 items)
-            // For larger batches, this is still better than redundant health checks
+            // Collect unique accounts and vaults from all batch items
             address[] memory uniqueAccounts = new address[](items.length * 2); // Max 2 accounts per item
             uint256 uniqueCount = 0;
             address[] memory uniqueVaults = new address[](items.length);
             uint256 vaultCount = 0;
 
             for (uint256 j = 0; j < items.length;) {
+                // Unwrap nested evc.call() operations
+                // When batch items target EVC with call(), extract the real target vault and operation
+                address targetContract = items[j].targetContract;
+                bytes memory operationData = items[j].data;
+                address onBehalfOf = items[j].onBehalfOfAccount;
+
+                if (targetContract == address(evc) && items[j].data.length >= 4) {
+                    bytes4 selector;
+                    bytes memory itemData = items[j].data;
+                    assembly {
+                        selector := mload(add(itemData, 32))
+                    }
+
+                    // Check if this is an evc.call() operation (selector 0x1f8b5215)
+                    if (selector == IEVC.call.selector) {
+                        // Decode the full calldata including selector
+                        // call(address targetContract, address onBehalfOfAccount, uint256 value, bytes data)
+                        bytes memory fullData = items[j].data;
+                        address nestedTarget;
+                        address nestedOnBehalfOf;
+                        bytes memory nestedData;
+
+                        assembly {
+                            // Skip 4 bytes (selector) + 32 bytes to get first param (targetContract)
+                            nestedTarget := mload(add(fullData, 36))
+                            // Skip 4 + 32 + 32 to get second param (onBehalfOfAccount)
+                            nestedOnBehalfOf := mload(add(fullData, 68))
+                            // Skip 4 + 32 + 32 + 32 to skip value, then read bytes data
+                            // The bytes data is at offset 4 + 32*3 = 100, but it's a dynamic param
+                            // so we need to read the offset pointer first
+                            let dataOffset := add(fullData, add(4, mload(add(fullData, 132))))
+                            let dataLength := mload(dataOffset)
+
+                            // Allocate memory for nestedData
+                            nestedData := mload(0x40)
+                            mstore(0x40, add(nestedData, add(32, dataLength)))
+                            mstore(nestedData, dataLength)
+
+                            // Copy data
+                            let src := add(dataOffset, 32)
+                            let dst := add(nestedData, 32)
+                            for { let copyIdx := 0 } lt(copyIdx, dataLength) { copyIdx := add(copyIdx, 32) } {
+                                mstore(add(dst, copyIdx), mload(add(src, copyIdx)))
+                            }
+                        }
+
+                        // Use the nested call's actual target and data
+                        targetContract = nestedTarget;
+                        operationData = nestedData;
+                        // For nested calls, use the nested onBehalfOf (the authenticated account)
+                        onBehalfOf = nestedOnBehalfOf;
+                    } else if (selector == IEVC.batch.selector) {
+                        // Nested batch via delegatecall: Skip here, will be processed by its own assertion run.
+                        // getAllCallInputs() captures both external and delegatecall batches, so each batch
+                        // (outer and inner) gets its own assertion run with complete validation.
+                        unchecked {
+                            ++j;
+                        }
+                        continue;
+                    }
+                }
+
                 // Skip non-contract addresses
-                if (items[j].targetContract.code.length == 0) {
+                if (targetContract.code.length == 0) {
                     unchecked {
                         ++j;
                     }
@@ -130,21 +174,21 @@ contract AccountHealthAssertion is Assertion {
                 }
 
                 // Extract accounts affected by this operation (does selector check internally)
-                address[] memory extractedAccounts = extractAccountsFromCalldata(items[j].data);
+                address[] memory extractedAccounts = extractAccountsFromCalldata(operationData);
 
                 // Early exit: if no accounts extracted, this is a non-monitored operation
                 // (deposit, mint, transfer, etc.) - skip all further processing
-                if (extractedAccounts.length == 0 && items[j].onBehalfOfAccount == address(0)) {
+                if (extractedAccounts.length == 0 && onBehalfOf == address(0)) {
                     unchecked {
                         ++j;
                     }
                     continue;
                 }
 
-                // Collect unique vaults
+                // Collect unique vaults (use unwrapped target)
                 bool vaultFound = false;
                 for (uint256 k = 0; k < vaultCount;) {
-                    if (uniqueVaults[k] == items[j].targetContract) {
+                    if (uniqueVaults[k] == targetContract) {
                         vaultFound = true;
                         break;
                     }
@@ -153,14 +197,14 @@ contract AccountHealthAssertion is Assertion {
                     }
                 }
                 if (!vaultFound) {
-                    uniqueVaults[vaultCount++] = items[j].targetContract;
+                    uniqueVaults[vaultCount++] = targetContract;
                 }
 
-                // Add onBehalfOfAccount if present and unique
-                if (items[j].onBehalfOfAccount != address(0)) {
+                // Add onBehalfOfAccount if present and unique (use unwrapped onBehalfOf)
+                if (onBehalfOf != address(0)) {
                     bool found = false;
                     for (uint256 k = 0; k < uniqueCount;) {
-                        if (uniqueAccounts[k] == items[j].onBehalfOfAccount) {
+                        if (uniqueAccounts[k] == onBehalfOf) {
                             found = true;
                             break;
                         }
@@ -169,7 +213,7 @@ contract AccountHealthAssertion is Assertion {
                         }
                     }
                     if (!found) {
-                        uniqueAccounts[uniqueCount++] = items[j].onBehalfOfAccount;
+                        uniqueAccounts[uniqueCount++] = onBehalfOf;
                     }
                 }
 
@@ -200,7 +244,7 @@ contract AccountHealthAssertion is Assertion {
                 }
             }
 
-            // PHASE 3: Validate each unique account at each touched vault and all controllers
+            // Validate each unique account at touched vaults and controllers
             for (uint256 n = 0; n < uniqueCount; n++) {
                 address account = uniqueAccounts[n];
 
@@ -222,61 +266,91 @@ contract AccountHealthAssertion is Assertion {
         }
     }
 
-    /// @notice Assertion for single call operations
-    /// @dev INVARIANT: Healthy accounts cannot become unhealthy through vault operations
+    /// @notice Validates account health for single call operations
+    /// @dev Intercepts EVC call operations and ensures healthy accounts remain healthy
     ///
-    /// HOW IT WORKS:
-    /// 1. Intercepts all EVC single calls (alternative way vaults are called)
-    /// 2. Extracts onBehalfOfAccount from each single call operation
-    /// 3. Checks health status before/after the transaction
-    /// 4. Reverts if a healthy account becomes unhealthy
+    /// Skips calls nested within batch operations by checking areChecksDeferred flag
+    /// using forkPreCall() to examine state at the exact moment the call executed.
+    /// This prevents double validation since batch assertions handle nested operations.
     ///
-    /// NOTE: This covers the "call through EVC" pattern mentioned in the Euler whitepaper
-    ///
-    /// OPTIMIZATION: Account Deduplication
-    /// Collects all unique accounts across all single calls before validation
+    /// Validation ensures each operation is checked exactly once:
+    /// - Top-level evc.call() → validated here
+    /// - evc.batch() operations → validated by assertionBatchAccountHealth
+    /// - Nested evc.call() within batch → skipped
     function assertionCallAccountHealth() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all single calls to analyze
         PhEvm.CallInputs[] memory singleCalls = ph.getCallInputs(address(evc), IEVC.call.selector);
 
-        // PHASE 1: Collect all unique accounts across all single calls
+        // Filter out calls that were nested within batch operations
         address[] memory uniqueAccounts = new address[](singleCalls.length * 2); // Max 2 accounts per call
         uint256 uniqueCount = 0;
         address[] memory uniqueVaults = new address[](singleCalls.length);
         uint256 vaultCount = 0;
 
-        for (uint256 i = 0; i < singleCalls.length; i++) {
+        for (uint256 i = 0; i < singleCalls.length;) {
+            // Fork to state RIGHT BEFORE this specific call executed
+            // This allows us to check if we were inside a batch at that moment
+            ph.forkPreCall(singleCalls[i].id);
+
+            // Skip this call if it was nested within a batch
+            // The batch assertion will handle validation for these
+            if (evc.areChecksDeferred()) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
             // Decode call parameters
             (address targetContract, address onBehalfOfAccount,, bytes memory data) =
                 abi.decode(singleCalls[i].input, (address, address, uint256, bytes));
 
             // Skip non-contract addresses
-            if (targetContract.code.length == 0) continue;
+            if (targetContract.code.length == 0) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            // Extract accounts affected by this operation (does selector check internally)
+            address[] memory extractedAccounts = extractAccountsFromCalldata(data);
+
+            // Early exit: if no accounts extracted, this is a non-monitored operation
+            if (extractedAccounts.length == 0 && onBehalfOfAccount == address(0)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
 
             // Collect unique vault
             bool vaultFound = false;
-            for (uint256 v = 0; v < vaultCount; v++) {
+            for (uint256 v = 0; v < vaultCount;) {
                 if (uniqueVaults[v] == targetContract) {
                     vaultFound = true;
                     break;
+                }
+                unchecked {
+                    ++v;
                 }
             }
             if (!vaultFound) {
                 uniqueVaults[vaultCount++] = targetContract;
             }
 
-            // Extract and collect unique accounts
-            address[] memory extractedAccounts = extractAccountsFromCalldata(data);
-
             // Add onBehalfOfAccount if unique
             if (onBehalfOfAccount != address(0)) {
                 bool found = false;
-                for (uint256 k = 0; k < uniqueCount; k++) {
+                for (uint256 k = 0; k < uniqueCount;) {
                     if (uniqueAccounts[k] == onBehalfOfAccount) {
                         found = true;
                         break;
+                    }
+                    unchecked {
+                        ++k;
                     }
                 }
                 if (!found) {
@@ -285,98 +359,142 @@ contract AccountHealthAssertion is Assertion {
             }
 
             // Add extracted accounts if unique
-            for (uint256 m = 0; m < extractedAccounts.length; m++) {
-                if (extractedAccounts[m] == address(0)) continue;
-
-                bool found = false;
-                for (uint256 k = 0; k < uniqueCount; k++) {
-                    if (uniqueAccounts[k] == extractedAccounts[m]) {
-                        found = true;
-                        break;
+            for (uint256 m = 0; m < extractedAccounts.length;) {
+                if (extractedAccounts[m] != address(0)) {
+                    bool found = false;
+                    for (uint256 k = 0; k < uniqueCount;) {
+                        if (uniqueAccounts[k] == extractedAccounts[m]) {
+                            found = true;
+                            break;
+                        }
+                        unchecked {
+                            ++k;
+                        }
+                    }
+                    if (!found) {
+                        uniqueAccounts[uniqueCount++] = extractedAccounts[m];
                     }
                 }
-                if (!found) {
-                    uniqueAccounts[uniqueCount++] = extractedAccounts[m];
+                unchecked {
+                    ++m;
                 }
+            }
+
+            unchecked {
+                ++i;
             }
         }
 
-        // PHASE 2: Validate each unique account at all touched vaults and controllers
-        for (uint256 n = 0; n < uniqueCount; n++) {
+        // Validate each unique account at touched vaults and controllers
+        for (uint256 n = 0; n < uniqueCount;) {
             address account = uniqueAccounts[n];
 
             // Check health at all touched vaults
-            for (uint256 v = 0; v < vaultCount; v++) {
+            for (uint256 v = 0; v < vaultCount;) {
                 validateAccountHealthInvariant(uniqueVaults[v], account);
+                unchecked {
+                    ++v;
+                }
             }
 
             // Check health at all controller vaults
             address[] memory controllers = evc.getControllers(account);
 
-            for (uint256 k = 0; k < controllers.length; k++) {
+            for (uint256 k = 0; k < controllers.length;) {
                 address controller = controllers[k];
-                if (controller.code.length == 0) continue;
+                if (controller.code.length != 0) {
+                    validateAccountHealthInvariant(controller, account);
+                }
+                unchecked {
+                    ++k;
+                }
+            }
 
-                validateAccountHealthInvariant(controller, account);
+            unchecked {
+                ++n;
             }
         }
     }
 
-    /// @notice Assertion for control collateral operations
-    /// @dev INVARIANT: Healthy accounts cannot become unhealthy through vault operations
+    /// @notice Validates account health for control collateral operations
+    /// @dev Intercepts EVC controlCollateral calls and ensures healthy accounts remain healthy
     ///
-    /// HOW IT WORKS:
-    /// 1. Intercepts all EVC control collateral calls (collateral management operations)
-    /// 2. Extracts onBehalfOfAccount from each control collateral operation
-    /// 3. Checks health status before/after the transaction
-    /// 4. Reverts if a healthy account becomes unhealthy
-    ///
-    /// NOTE: This covers collateral control operations that might affect account health
-    ///
-    /// OPTIMIZATION: Account Deduplication
-    /// Collects all unique accounts across all control collateral calls before validation
+    /// Skips calls nested within batch operations by checking areChecksDeferred flag
+    /// using forkPreCall() to examine state at the exact moment the call executed.
     function assertionControlCollateralAccountHealth() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get all control collateral calls to analyze
         PhEvm.CallInputs[] memory controlCalls = ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
 
-        // PHASE 1: Collect all unique accounts across all control collateral calls
+        // Collect unique accounts and vaults, filtering out nested calls
         address[] memory uniqueAccounts = new address[](controlCalls.length * 2); // Max 2 accounts per call
         uint256 uniqueCount = 0;
         address[] memory uniqueVaults = new address[](controlCalls.length);
         uint256 vaultCount = 0;
 
-        for (uint256 i = 0; i < controlCalls.length; i++) {
+        for (uint256 i = 0; i < controlCalls.length;) {
+            // Fork to state RIGHT BEFORE this specific call executed
+            // This allows us to check if we were inside a batch at that moment
+            ph.forkPreCall(controlCalls[i].id);
+
+            // Skip this call if it was nested within a batch
+            // The batch assertion will handle validation for these
+            if (evc.areChecksDeferred()) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
             // Decode control collateral parameters
             (address targetCollateral, address onBehalfOfAccount,, bytes memory data) =
                 abi.decode(controlCalls[i].input, (address, address, uint256, bytes));
 
             // Skip non-contract addresses
-            if (targetCollateral.code.length == 0) continue;
+            if (targetCollateral.code.length == 0) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            // Extract accounts affected by this operation (does selector check internally)
+            address[] memory extractedAccounts = extractAccountsFromCalldata(data);
+
+            // Early exit: if no accounts extracted, this is a non-monitored operation
+            if (extractedAccounts.length == 0 && onBehalfOfAccount == address(0)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
 
             // Collect unique vault
             bool vaultFound = false;
-            for (uint256 v = 0; v < vaultCount; v++) {
+            for (uint256 v = 0; v < vaultCount;) {
                 if (uniqueVaults[v] == targetCollateral) {
                     vaultFound = true;
                     break;
+                }
+                unchecked {
+                    ++v;
                 }
             }
             if (!vaultFound) {
                 uniqueVaults[vaultCount++] = targetCollateral;
             }
 
-            // Extract and collect unique accounts
-            address[] memory extractedAccounts = extractAccountsFromCalldata(data);
-
             // Add onBehalfOfAccount if unique
             if (onBehalfOfAccount != address(0)) {
                 bool found = false;
-                for (uint256 k = 0; k < uniqueCount; k++) {
+                for (uint256 k = 0; k < uniqueCount;) {
                     if (uniqueAccounts[k] == onBehalfOfAccount) {
                         found = true;
                         break;
+                    }
+                    unchecked {
+                        ++k;
                     }
                 }
                 if (!found) {
@@ -385,39 +503,59 @@ contract AccountHealthAssertion is Assertion {
             }
 
             // Add extracted accounts if unique
-            for (uint256 m = 0; m < extractedAccounts.length; m++) {
-                if (extractedAccounts[m] == address(0)) continue;
-
-                bool found = false;
-                for (uint256 k = 0; k < uniqueCount; k++) {
-                    if (uniqueAccounts[k] == extractedAccounts[m]) {
-                        found = true;
-                        break;
+            for (uint256 m = 0; m < extractedAccounts.length;) {
+                if (extractedAccounts[m] != address(0)) {
+                    bool found = false;
+                    for (uint256 k = 0; k < uniqueCount;) {
+                        if (uniqueAccounts[k] == extractedAccounts[m]) {
+                            found = true;
+                            break;
+                        }
+                        unchecked {
+                            ++k;
+                        }
+                    }
+                    if (!found) {
+                        uniqueAccounts[uniqueCount++] = extractedAccounts[m];
                     }
                 }
-                if (!found) {
-                    uniqueAccounts[uniqueCount++] = extractedAccounts[m];
+                unchecked {
+                    ++m;
                 }
+            }
+
+            unchecked {
+                ++i;
             }
         }
 
-        // PHASE 2: Validate each unique account at all touched vaults and controllers
-        for (uint256 n = 0; n < uniqueCount; n++) {
+        // Validate each unique account at touched vaults and controllers
+        for (uint256 n = 0; n < uniqueCount;) {
             address account = uniqueAccounts[n];
 
             // Check health at all touched collateral vaults
-            for (uint256 v = 0; v < vaultCount; v++) {
+            for (uint256 v = 0; v < vaultCount;) {
                 validateAccountHealthInvariant(uniqueVaults[v], account);
+                unchecked {
+                    ++v;
+                }
             }
 
             // Check health at all controller vaults
             address[] memory controllers = evc.getControllers(account);
 
-            for (uint256 k = 0; k < controllers.length; k++) {
+            for (uint256 k = 0; k < controllers.length;) {
                 address controller = controllers[k];
-                if (controller.code.length == 0) continue;
+                if (controller.code.length != 0) {
+                    validateAccountHealthInvariant(controller, account);
+                }
+                unchecked {
+                    ++k;
+                }
+            }
 
-                validateAccountHealthInvariant(controller, account);
+            unchecked {
+                ++n;
             }
         }
     }
@@ -425,20 +563,8 @@ contract AccountHealthAssertion is Assertion {
     /// @notice Validates the account health invariant for a specific vault and account
     /// @param vault The vault address to validate
     /// @param account The account address to validate
-    ///
-    /// CORE INVARIANT: Healthy accounts cannot become unhealthy
-    ///
-    /// HOW IT WORKS:
-    /// 1. Captures account health before the transaction (pre-state)
-    /// 2. Captures account health after the transaction (post-state)
-    /// 3. If account was healthy before, it must remain healthy after
-    /// 4. Reverts if a healthy account becomes unhealthy
-    ///
-    /// EDGE CASES HANDLED:
-    /// - Non-contract addresses (skipped)
-    /// - Accounts with no position (skipped - TODO: verify this is correct)
-    /// - Already unhealthy accounts (skipped - they can remain unhealthy)
-    /// - Failed health check calls (treated as unhealthy)
+    /// @dev Compares account health before and after transaction. Reverts if a healthy
+    ///      account becomes unhealthy. Skips non-contract addresses and already unhealthy accounts.
     function validateAccountHealthInvariant(address vault, address account) internal {
         // Skip zero address
         if (account == address(0)) return;
@@ -464,11 +590,7 @@ contract AccountHealthAssertion is Assertion {
     /// @param vault The vault address (controller vault)
     /// @param account The account address to check
     /// @return healthy True if the account is healthy
-    ///
-    /// HEALTH CHECK STRATEGY:
-    /// Calls the vault's checkAccountStatus() function (required by IVault interface)
-    /// - If it returns the magic value 0xb168c58f, account is healthy
-    /// - If it reverts or returns wrong value, account is unhealthy
+    /// @dev Calls checkAccountStatus() and expects magic value 0xb168c58f for healthy accounts
     function isAccountHealthy(address vault, address account) internal view returns (bool healthy) {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
@@ -493,17 +615,12 @@ contract AccountHealthAssertion is Assertion {
     /// @notice Extracts affected accounts from vault function call data
     /// @param data The calldata for the vault function
     /// @return accounts Array of addresses that may be affected by this call
-    ///
-    /// PARAMETER EXTRACTION STRATEGY:
-    /// Parses function signatures to extract accounts whose health may be affected:
-    /// - withdraw(uint256,address,address) - extracts owner (3rd param)
-    /// - redeem(uint256,address,address) - extracts owner (3rd param)
-    /// - transferFrom(address,address,uint256) - extracts from (1st param)
-    /// - borrow(uint256,address) - extracts receiver (2nd param, the borrower)
-    /// - repay(uint256,address) - extracts debtor (2nd param)
-    /// - liquidate(address,address,uint256,uint256) - extracts violator (1st param)
-    ///
-    /// Returns empty array if function signature is not recognized or has insufficient data.
+    /// @dev Parses function selectors to extract accounts:
+    ///      withdraw/redeem → owner (3rd param)
+    ///      transferFrom → from (1st param)
+    ///      borrow → receiver (2nd param)
+    ///      repay → debtor (2nd param)
+    ///      liquidate → violator (1st param)
     function extractAccountsFromCalldata(
         bytes memory data
     ) internal pure returns (address[] memory accounts) {
@@ -576,78 +693,3 @@ contract AccountHealthAssertion is Assertion {
         return new address[](0);
     }
 }
-
-// TODO: OPTIMIZATION - Split into separate assertion functions per vault operation type
-//
-// MOTIVATION:
-// Assertions execute in parallel, so total gas cost doesn't matter - only the gas cost of the
-// slowest individual assertion. Currently, assertionBatchAccountHealth processes all vault
-// operations in one function, which could hit gas limits with complex batches.
-//
-// PROPOSED APPROACH:
-// Split assertionBatchAccountHealth into separate functions, one per vault operation type:
-// - assertionBatchDeposit() - handles deposit(uint256,address) calls
-// - assertionBatchBorrow() - handles borrow(uint256,address) and borrow(address,uint256) calls
-// - assertionBatchWithdraw() - handles withdraw(uint256,address,address) calls
-// - assertionBatchRepay() - handles repay(uint256,address) calls
-// - assertionBatchTransfer() - handles transfer() and transferFrom() calls
-// - assertionBatchRedeem() - handles redeem(uint256,address,address) calls
-// - assertionBatchMint() - handles mint(uint256,address) calls
-//
-// Each function would:
-// 1. Register trigger for IEVC.batch.selector
-// 2. Get batch calls via ph.getCallInputs()
-// 3. Loop through batch items and check if selector matches its specific function
-// 4. Extract accounts and validate health only for matching operations
-// 5. Skip non-matching operations (continue to next item)
-//
-// BENEFITS:
-// - Each assertion function is lightweight (only processes one operation type)
-// - Maximizes parallelization - all assertions run concurrently
-// - Easier to maintain - each function has simple, focused logic
-// - Easier to extend - add new operation types by adding new functions
-// - Better gas efficiency per assertion (though total gas may be higher due to some duplication)
-//
-// TRADEOFFS:
-// - Work duplication: If a batch has [deposit, deposit, borrow], assertionBatchDeposit would
-//   process the batch twice (once for each deposit). Currently no good way to avoid this without
-//   new cheatcodes for batch extraction.
-// - More assertion functions to register and manage
-//
-// NOTE FOR assertionCallAccountHealth:
-// Single call operations don't benefit from splitting since there's only ever one operation per
-// call. Keep assertionCallAccountHealth as a single function that handles all operation types.
-//
-// IMPLEMENTATION:
-// Example structure for one split function:
-//
-// function assertionBatchDeposit() external {
-//     IEVC evc = IEVC(ph.getAssertionAdopter());
-//     PhEvm.CallInputs[] memory batchCalls = ph.getCallInputs(address(evc), IEVC.batch.selector);
-//
-//     for (uint256 i = 0; i < batchCalls.length; i++) {
-//         IEVC.BatchItem[] memory items = abi.decode(batchCalls[i].input, (IEVC.BatchItem[]));
-//
-//         for (uint256 j = 0; j < items.length; j++) {
-//             bytes4 selector = bytes4(items[j].data);
-//             if (selector != 0x6e553f65) continue; // Only process deposit(uint256,address)
-//
-//             // Extract receiver from deposit parameters
-//             (, address receiver) = abi.decode(slice(items[j].data, 4, 64), (uint256, address));
-//
-//             // Validate both receiver and onBehalfOfAccount
-//             if (receiver != address(0)) {
-//                 validateAccountHealthInvariant(items[j].targetContract, receiver);
-//             }
-//             if (items[j].onBehalfOfAccount != address(0) &&
-//                 items[j].onBehalfOfAccount != receiver) {
-//                 validateAccountHealthInvariant(items[j].targetContract, items[j].onBehalfOfAccount);
-//             }
-//         }
-//     }
-// }
-//
-// FUTURE IMPROVEMENT:
-// Consider proposing a new cheatcode like ph.getBatchItemsBySelector(selector) that returns
-// only the batch items matching a specific function selector, eliminating the need to loop
-// through all items in each assertion function.

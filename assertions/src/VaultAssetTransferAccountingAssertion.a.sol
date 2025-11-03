@@ -53,21 +53,15 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
     /// @notice Specifies which EVC functions this assertion should intercept
     /// @dev Registers triggers for batch, call, and controlCollateral operations
     function triggers() external view override {
+        registerCallTrigger(this.assertionBatchAssetTransferAccounting.selector, IEVC.batch.selector);
+        registerCallTrigger(this.assertionCallAssetTransferAccounting.selector, IEVC.call.selector);
         registerCallTrigger(
-            this.assertionBatchAssetTransferAccounting.selector, IEVC.batch.selector
-        );
-        registerCallTrigger(
-            this.assertionCallAssetTransferAccounting.selector, IEVC.call.selector
-        );
-        registerCallTrigger(
-            this.assertionControlCollateralAssetTransferAccounting.selector,
-            IEVC.controlCollateral.selector
+            this.assertionControlCollateralAssetTransferAccounting.selector, IEVC.controlCollateral.selector
         );
     }
 
-    /// @notice Monitors EVC.batch() calls to validate asset transfer accounting for all vaults in the batch
-    /// @dev Extracts all vault addresses from batch items and validates accounting once per unique vault
-    /// @dev Optimized to collect all vaults first, then validate each unique vault once
+    /// @notice Validates asset transfer accounting for batch operations
+    /// @dev Validates each unique vault in batch once
     function assertionBatchAssetTransferAccounting() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory batchCalls = ph.getCallInputs(address(evc), IEVC.batch.selector);
@@ -117,30 +111,29 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
         }
     }
 
-    /// @notice Monitors EVC.call() to validate asset transfer accounting for the target vault
-    /// @dev Extracts the target contract from call parameters and validates accounting
+    /// @notice Validates asset transfer accounting for call operations
+    /// @dev Validates target contract from call parameters
     function assertionCallAssetTransferAccounting() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
         PhEvm.CallInputs[] memory callInputs = ph.getCallInputs(address(evc), IEVC.call.selector);
 
         for (uint256 i = 0; i < callInputs.length; i++) {
-            (address targetContract,,,,) =
-                abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
+            (address targetContract,,,,) = abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
 
             if (targetContract.code.length == 0) continue;
             validateVaultAssetTransferAccounting(targetContract);
         }
     }
 
-    /// @notice Monitors EVC.controlCollateral() to validate asset transfer accounting for the collateral vault
-    /// @dev Extracts the target collateral from controlCollateral parameters and validates accounting
+    /// @notice Validates asset transfer accounting for controlCollateral operations
+    /// @dev Validates target collateral from controlCollateral parameters
     function assertionControlCollateralAssetTransferAccounting() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
-        PhEvm.CallInputs[] memory controlInputs =
-            ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
+        PhEvm.CallInputs[] memory controlInputs = ph.getCallInputs(address(evc), IEVC.controlCollateral.selector);
 
         for (uint256 i = 0; i < controlInputs.length; i++) {
-            // controlCollateral signature: (address targetCollateral, address onBehalfOfAccount, uint256 value, bytes data)
+            // controlCollateral signature: (address targetCollateral, address onBehalfOfAccount, uint256 value, bytes
+            // data)
             (address targetCollateral,,,) = abi.decode(controlInputs[i].input, (address, address, uint256, bytes));
 
             if (targetCollateral.code.length == 0) continue;
@@ -148,10 +141,11 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
         }
     }
 
-    /// @notice Validates that all asset transfers from a vault are accounted for by Withdraw or Borrow events
-    /// @dev Parses all logs in the transaction and sums Transfer, Withdraw, and Borrow events
-    /// @param vault The vault address to validate accounting for
-    function validateVaultAssetTransferAccounting(address vault) internal {
+    /// @notice Validates all asset transfers are accounted for by Withdraw or Borrow events
+    /// @param vault The vault address to validate
+    function validateVaultAssetTransferAccounting(
+        address vault
+    ) internal {
         // Get the asset token address for this vault
         address asset = getAssetAddress(vault);
         if (asset == address(0)) return; // Not an ERC4626 vault or asset() call failed
@@ -185,7 +179,8 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
             }
 
             // Check Withdraw events from vault
-            // Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)
+            // Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256
+            // shares)
             if (log.emitter == vault && log.topics.length >= 4) {
                 if (log.topics[0] == withdrawEventSig) {
                     // Assets and shares are in data field
@@ -214,10 +209,11 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
     }
 
     /// @notice Gets the asset token address for a vault
-    /// @dev Calls the vault's asset() function (ERC4626 standard)
     /// @param vault The vault address to query
     /// @return The asset token address
-    function getAssetAddress(address vault) internal view returns (address) {
+    function getAssetAddress(
+        address vault
+    ) internal view returns (address) {
         return IERC4626(vault).asset();
     }
 }

@@ -52,20 +52,9 @@ contract VaultSharePriceAssertion is Assertion {
         );
     }
 
-    /// @notice Assertion for batch operations
-    /// @dev INVARIANT: Vault share prices cannot decrease unless there's legitimate bad debt socialization
-    ///
-    /// HOW IT WORKS:
-    /// 1. Intercepts all EVC batch calls (primary way vaults are called)
-    /// 2. Extracts all vault addresses from the batch operations
-    /// 3. For each vault, compares share price before/after the transaction
-    /// 4. If share price decreased, checks if it's due to bad debt socialization
-    /// 5. Reverts if share price decreased without legitimate bad debt socialization
-    ///
-    /// SHARE PRICE CALCULATION:
-    /// - Share price = totalAssets * 1e18 / totalSupply
-    /// - Uses ERC4626 standard totalAssets() and totalSupply() functions
-    /// - Handles edge cases like zero total supply gracefully
+    /// @notice Validates share price invariant for batch operations
+    /// @dev Compares vault share prices before/after transaction. Reverts if share price decreases without bad debt
+    /// socialization
     function assertionBatchSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
@@ -84,17 +73,9 @@ contract VaultSharePriceAssertion is Assertion {
         }
     }
 
-    /// @notice Assertion for single call operations
-    /// @dev INVARIANT: Vault share prices cannot decrease unless there's legitimate bad debt socialization
-    ///
-    /// HOW IT WORKS:
-    /// 1. Intercepts all EVC single calls (alternative way vaults are called)
-    /// 2. Extracts vault address from each single call operation
-    /// 3. For each vault, compares share price before/after the transaction
-    /// 4. If share price decreased, checks if it's due to bad debt socialization
-    /// 5. Reverts if share price decreased without legitimate bad debt socialization
-    ///
-    /// NOTE: This covers the "call through EVC" pattern mentioned in the Euler whitepaper
+    /// @notice Validates share price invariant for call operations
+    /// @dev Compares vault share prices before/after transaction. Reverts if share price decreases without bad debt
+    /// socialization
     function assertionCallSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
@@ -112,17 +93,9 @@ contract VaultSharePriceAssertion is Assertion {
         }
     }
 
-    /// @notice Assertion for control collateral operations
-    /// @dev INVARIANT: Vault share prices cannot decrease unless there's legitimate bad debt socialization
-    ///
-    /// HOW IT WORKS:
-    /// 1. Intercepts all EVC control collateral calls (collateral management operations)
-    /// 2. Extracts vault address from each control collateral operation
-    /// 3. For each vault, compares share price before/after the transaction
-    /// 4. If share price decreased, checks if it's due to bad debt socialization
-    /// 5. Reverts if share price decreased without legitimate bad debt socialization
-    ///
-    /// NOTE: This covers collateral control operations that might affect vault share prices
+    /// @notice Validates share price invariant for controlCollateral operations
+    /// @dev Compares vault share prices before/after transaction. Reverts if share price decreases without bad debt
+    /// socialization
     function assertionControlCollateralSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
@@ -140,22 +113,8 @@ contract VaultSharePriceAssertion is Assertion {
         }
     }
 
-    /// @notice Validates the share price invariant for a specific vault
+    /// @notice Validates share price invariant for a vault
     /// @param vault The vault address to validate
-    ///
-    /// CORE INVARIANT: Share price cannot decrease unless there's legitimate bad debt socialization
-    ///
-    /// HOW IT WORKS:
-    /// 1. Captures vault state before the transaction (pre-state)
-    /// 2. Captures vault state after the transaction (post-state)
-    /// 3. Calculates share prices: totalAssets * 1e18 / totalSupply
-    /// 4. If share price decreased, checks for bad debt socialization
-    /// 5. Reverts if decrease occurred without legitimate bad debt socialization
-    ///
-    /// EDGE CASES HANDLED:
-    /// - Non-contract addresses (skipped)
-    /// - Vaults that don't implement ERC4626 (graceful failure)
-    /// - Zero total supply (share price = 0)
     function validateVaultSharePriceInvariant(
         address vault
     ) internal {
@@ -211,17 +170,9 @@ contract VaultSharePriceAssertion is Assertion {
         }
     }
 
-    /// @notice Checks if bad debt socialization occurred for a vault using event monitoring
+    /// @notice Checks if bad debt socialization occurred for a vault
     /// @param vault The vault address to check
-    /// @return hasBadDebt True if bad debt socialization was detected via events
-    ///
-    /// BAD DEBT SOCIALIZATION DETECTION VIA EVENTS:
-    /// According to the Euler whitepaper, bad debt socialization can be detected by:
-    /// 1. DebtSocialized event (primary indicator - if present, bad debt socialization occurred)
-    /// 2. Repay events where the repay appears to come from the liquidator
-    /// 3. Withdraw events where the withdraw appears to come from address(0)
-    ///
-    /// This function uses ph.getLogs() to monitor these events during the transaction.
+    /// @return hasBadDebt True if DebtSocialized event or Repay+Withdraw pattern detected
     function checkForBadDebtSocialization(
         address vault
     ) internal returns (bool hasBadDebt) {
