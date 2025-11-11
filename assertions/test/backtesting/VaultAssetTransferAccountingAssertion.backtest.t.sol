@@ -19,14 +19,19 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
     /// @notice Backtest batch operations against mainnet EVC
     /// @dev Tests that all asset transfers are accounted for in batch operations
     function testBacktest_VaultAssetTransferAccounting_BatchOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
-            assertionSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
+                assertionSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         // Verify no assertion failures in historical data
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
@@ -35,14 +40,19 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
     /// @notice Backtest single call operations against mainnet EVC
     /// @dev Tests that all asset transfers are accounted for in call operations
     function testBacktest_VaultAssetTransferAccounting_CallOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
-            assertionSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
+                assertionSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
     }
@@ -50,16 +60,20 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
     /// @notice Backtest control collateral operations against mainnet EVC
     /// @dev Tests that all asset transfers are accounted for in controlCollateral operations
     function testBacktest_VaultAssetTransferAccounting_ControlCollateralOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
-            assertionSelector: VaultAssetTransferAccountingAssertion
-                .assertionControlCollateralAssetTransferAccounting
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
+                assertionSelector: VaultAssetTransferAccountingAssertion.assertionControlCollateralAssetTransferAccounting
                 .selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
     }

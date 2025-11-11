@@ -19,14 +19,19 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
     /// @notice Backtest batch operations against mainnet EVC
     /// @dev Tests that exchange rate changes are within 5% for batch operations
     function testBacktest_VaultExchangeRateSpike_BatchOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultExchangeRateSpikeAssertion).creationCode,
-            assertionSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultExchangeRateSpikeAssertion).creationCode,
+                assertionSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         // Verify no assertion failures in historical data
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
@@ -35,14 +40,19 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
     /// @notice Backtest single call operations against mainnet EVC
     /// @dev Tests that exchange rate changes are within 5% for call operations
     function testBacktest_VaultExchangeRateSpike_CallOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultExchangeRateSpikeAssertion).creationCode,
-            assertionSelector: VaultExchangeRateSpikeAssertion.assertionCallExchangeRateSpike.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultExchangeRateSpikeAssertion).creationCode,
+                assertionSelector: VaultExchangeRateSpikeAssertion.assertionCallExchangeRateSpike.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
     }
@@ -50,14 +60,19 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
     /// @notice Backtest control collateral operations against mainnet EVC
     /// @dev Tests that exchange rate changes are within 5% for controlCollateral operations
     function testBacktest_VaultExchangeRateSpike_ControlCollateralOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultExchangeRateSpikeAssertion).creationCode,
-            assertionSelector: VaultExchangeRateSpikeAssertion.assertionControlCollateralExchangeRateSpike.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultExchangeRateSpikeAssertion).creationCode,
+                assertionSelector: VaultExchangeRateSpikeAssertion.assertionControlCollateralExchangeRateSpike.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
     }

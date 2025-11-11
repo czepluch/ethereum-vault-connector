@@ -19,14 +19,19 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
     /// @notice Backtest batch operations against mainnet EVC
     /// @dev Tests that vault balance >= cash for all batch operations
     function testBacktest_VaultAccountingIntegrity_BatchOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
-            assertionSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
+                assertionSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         // Verify no assertion failures in historical data
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
@@ -35,14 +40,19 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
     /// @notice Backtest single call operations against mainnet EVC
     /// @dev Tests that vault balance >= cash for all call operations
     function testBacktest_VaultAccountingIntegrity_CallOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
-            assertionSelector: VaultAccountingIntegrityAssertion.assertionCallAccountingIntegrity.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
+                assertionSelector: VaultAccountingIntegrityAssertion.assertionCallAccountingIntegrity.selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
     }
@@ -50,14 +60,20 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
     /// @notice Backtest control collateral operations against mainnet EVC
     /// @dev Tests that vault balance >= cash for all controlCollateral operations
     function testBacktest_VaultAccountingIntegrity_ControlCollateralOperations() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest({
-            targetContract: EVC_MAINNET,
-            endBlock: END_BLOCK,
-            blockRange: BLOCK_RANGE,
-            assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
-            assertionSelector: VaultAccountingIntegrityAssertion.assertionControlCollateralAccountingIntegrity.selector,
-            rpcUrl: vm.envString("MAINNET_RPC_URL")
-        });
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_MAINNET,
+                endBlock: END_BLOCK,
+                blockRange: BLOCK_RANGE,
+                assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
+                assertionSelector: VaultAccountingIntegrityAssertion.assertionControlCollateralAccountingIntegrity
+                    .selector,
+                rpcUrl: vm.envString("MAINNET_RPC_URL"),
+                detailedBlocks: false,
+                useTraceFilter: false,
+                forkByTxHash: false
+            })
+        );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
     }
