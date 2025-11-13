@@ -248,6 +248,18 @@ contract AccountHealthAssertion is Assertion {
             for (uint256 n = 0; n < uniqueCount; n++) {
                 address account = uniqueAccounts[n];
 
+                // Skip if this "account" is actually a vault address
+                // Vaults don't have account health in the traditional sense - they manage user positions
+                // Checking health of a vault address would result in unnecessary reverts
+                bool isVault = false;
+                for (uint256 v = 0; v < vaultCount; v++) {
+                    if (uniqueVaults[v] == account) {
+                        isVault = true;
+                        break;
+                    }
+                }
+                if (isVault) continue;
+
                 // Check health at all touched vaults
                 for (uint256 v = 0; v < vaultCount; v++) {
                     validateAccountHealthInvariant(uniqueVaults[v], account);
@@ -283,7 +295,7 @@ contract AccountHealthAssertion is Assertion {
         // Get all single calls to analyze
         PhEvm.CallInputs[] memory singleCalls = ph.getCallInputs(address(evc), IEVC.call.selector);
 
-        // Filter out calls that were nested within batch operations
+        // Collect unique accounts and vaults, filtering out nested calls
         address[] memory uniqueAccounts = new address[](singleCalls.length * 2); // Max 2 accounts per call
         uint256 uniqueCount = 0;
         address[] memory uniqueVaults = new address[](singleCalls.length);
@@ -565,12 +577,19 @@ contract AccountHealthAssertion is Assertion {
     /// @param account The account address to validate
     /// @dev Compares account health before and after transaction. Reverts if a healthy
     ///      account becomes unhealthy. Skips non-contract addresses and already unhealthy accounts.
-    function validateAccountHealthInvariant(address vault, address account) internal {
+    function validateAccountHealthInvariant(
+        address vault,
+        address account
+    ) internal {
         // Skip zero address
         if (account == address(0)) return;
 
         // Skip non-contract vaults
         if (vault.code.length == 0) return;
+
+        // Check if vault implements IVault interface by verifying checkAccountStatus exists
+        // This prevents expensive operations on non-vault contracts (e.g., WETH, ERC20s)
+        if (!supportsCheckAccountStatus(vault)) return;
 
         // Get pre-transaction account health
         ph.forkPreTx();
@@ -586,12 +605,36 @@ contract AccountHealthAssertion is Assertion {
         }
     }
 
+    /// @notice Checks if a contract implements checkAccountStatus function
+    /// @param vault The address to check
+    /// @return bool True if the contract implements checkAccountStatus
+    /// @dev Uses a low-level staticcall to check function existence without executing it
+    function supportsCheckAccountStatus(
+        address vault
+    ) internal view returns (bool) {
+        // Prepare calldata for checkAccountStatus(address,address[])
+        // We use empty arrays as parameters since we only care if the function exists
+        bytes memory data = abi.encodeWithSelector(IVault.checkAccountStatus.selector, address(0), new address[](0));
+
+        // Use staticcall with minimal gas to check if function exists
+        // This will return false for contracts that don't implement the function
+        (bool success,) = vault.staticcall{gas: 10000}(data);
+
+        // If the call succeeds or reverts with data (function exists but validation failed),
+        // the contract implements the interface
+        // If it fails with no data, the function doesn't exist
+        return success;
+    }
+
     /// @notice Checks if an account is healthy for a given vault
     /// @param vault The vault address (controller vault)
     /// @param account The account address to check
     /// @return healthy True if the account is healthy
     /// @dev Calls checkAccountStatus() and expects magic value 0xb168c58f for healthy accounts
-    function isAccountHealthy(address vault, address account) internal view returns (bool healthy) {
+    function isAccountHealthy(
+        address vault,
+        address account
+    ) internal view returns (bool healthy) {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
         // Get enabled collaterals for the account

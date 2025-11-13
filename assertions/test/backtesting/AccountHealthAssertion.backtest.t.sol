@@ -17,6 +17,10 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
     uint256 constant END_BLOCK = 23697590; // out of gas batch
     uint256 constant BLOCK_RANGE = 10;
 
+    // Focused test configuration for TX4 debugging
+    uint256 constant TX4_BLOCK = 23697586; // TX4 specific block
+    uint256 constant SINGLE_BLOCK_RANGE = 1; // Just test one block
+
     /// @notice Backtest batch operations against mainnet EVC
     /// @dev Tests assertionBatchAccountHealth against 10 blocks of real transactions
     function testBacktest_EVC_BatchOperations_simple() public {
@@ -83,8 +87,8 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 assertionSelector: AccountHealthAssertion.assertionCallAccountHealth.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: false,
-                forkByTxHash: false
+                useTraceFilter: true,
+                forkByTxHash: true
             })
         );
     }
