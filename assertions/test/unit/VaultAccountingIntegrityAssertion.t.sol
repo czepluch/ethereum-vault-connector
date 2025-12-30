@@ -426,6 +426,34 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         evc.batch(items);
     }
 
+    /// @notice SCENARIO: Batch with 10 deposit operations - gas benchmark
+    /// @dev Tests assertion performance with large batch size
+    function testAccountingIntegrity_Batch_10Operations_Passes() public {
+        // Setup: Mint more tokens for multiple deposits
+        asset.mint(user1, 2000e18);
+        vm.prank(user1);
+        asset.approve(address(vault1), type(uint256).max);
+
+        // Create batch with 10 deposits
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](10);
+        for (uint256 i = 0; i < 10; i++) {
+            items[i].targetContract = address(vault1);
+            items[i].onBehalfOfAccount = user1;
+            items[i].value = 0;
+            items[i].data = abi.encodeWithSelector(IERC4626.deposit.selector, 10e18, user1);
+        }
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
+        });
+
+        vm.prank(user1);
+        evc.batch(items);
+    }
+
     // ========================================
     // BOUNDARY CONDITION TESTS
     // ========================================

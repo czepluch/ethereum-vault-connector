@@ -608,6 +608,34 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         evc.batch(items);
     }
 
+    /// @notice SCENARIO: Batch with 10 withdrawal operations - gas benchmark (passing version)
+    /// @dev Tests assertion performance with large batch size using smaller amounts to avoid gas limit
+    function testAssetTransferAccounting_Batch_10Withdrawals_Passes() public {
+        // Setup: Deposit enough for 10 withdrawals
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 1000e18, user1));
+
+        // Create batch with 10 withdrawals
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](10);
+        for (uint256 i = 0; i < 10; i++) {
+            items[i].targetContract = address(vault1);
+            items[i].onBehalfOfAccount = user1;
+            items[i].value = 0;
+            items[i].data = abi.encodeWithSelector(IERC4626.withdraw.selector, 10e18, user1, user1);
+        }
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
+        });
+
+        // Execute batch call
+        vm.prank(user1);
+        evc.batch(items);
+    }
+
     /// @notice SCENARIO: Batch with 10 withdrawal operations - gas benchmark
     /// @dev Tests assertion performance with large batch size
     /// TODO: This test currently fails due to hitting the 100k gas limit.

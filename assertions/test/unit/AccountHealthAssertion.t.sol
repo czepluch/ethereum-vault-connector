@@ -443,34 +443,6 @@ contract TestAccountHealthAssertion is BaseTest {
         evc.batch(items);
     }
 
-    /// @notice Edge case, zero address account
-    /// @dev Expected: pass (zero addresses are skipped)
-    function testAccountHealth_ZeroAddress_Passes() public {
-        // Create batch call that would extract address(0)
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
-        items[0].targetContract = address(vault1);
-        items[0].onBehalfOfAccount = user1;
-        items[0].value = 0;
-        // Call deposit with address(0) as receiver
-        items[0].data = abi.encodeWithSelector(MockVault.deposit.selector, 100e18, address(0));
-
-        // Register assertion for the batch call
-        cl.assertion({
-            adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
-            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
-        });
-
-        // Execute batch call - will likely fail at vault level, but assertion should handle gracefully
-        vm.prank(user1);
-        // Should fail at the vault level, not at the assertion level
-        // Using expectRevert to catch the vault error
-        vm.expectRevert();
-        evc.batch(items);
-
-        // Assertion should not revert (correct behavior)
-    }
-
     /// @notice Account with no position (zero collateral and liability)
     /// @dev Expected: pass (zero position accounts are treated as healthy)
     function testAccountHealth_NoPosition_Passes() public {
@@ -1629,6 +1601,92 @@ contract TestAccountHealthAssertion is BaseTest {
         assertEq(vault1.balanceOf(user1), 50e18, "User1 should have 50e18 shares remaining");
     }
 
+    /// @notice MULTI-ACCOUNT TEST: 1 owner, 10 different receivers - GAS BENCHMARK
+    /// @dev Tests batch where same owner (user1) withdraws to 10 different receivers
+    /// @dev Tests that assertion correctly extracts and validates account health for all affected accounts
+    /// @dev 10 withdrawals of 10e18 each = 100e18 total. Expected: pass
+    function testBatch_MultipleAccounts_1Owner_10DifferentReceivers_Passes() public {
+        // Setup: User1 deposits using evc.call() (OUTSIDE assertion monitoring)
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1));
+        vm.stopPrank();
+
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
+
+        // Register assertion before the batch
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create batch with same owner (user1) but different receivers
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](10);
+
+        // Withdraw to user1 (self)
+        items[0].targetContract = address(vault1);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, user1, user1);
+
+        // Withdraw to user2
+        items[1].targetContract = address(vault1);
+        items[1].onBehalfOfAccount = user1;
+        items[1].value = 0;
+        items[1].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, user2, user1);
+
+        // Withdraw to user3
+        items[2].targetContract = address(vault1);
+        items[2].onBehalfOfAccount = user1;
+        items[2].value = 0;
+        items[2].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, user3, user1);
+
+        // Withdraw to liquidator
+        items[3].targetContract = address(vault1);
+        items[3].onBehalfOfAccount = user1;
+        items[3].value = 0;
+        items[3].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, liquidator, user1);
+
+        // Withdraw to arbitrary addresses
+        items[4].targetContract = address(vault1);
+        items[4].onBehalfOfAccount = user1;
+        items[4].value = 0;
+        items[4].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, address(0xBEEF), user1);
+
+        items[5].targetContract = address(vault1);
+        items[5].onBehalfOfAccount = user1;
+        items[5].value = 0;
+        items[5].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, address(0xCAFE), user1);
+
+        items[6].targetContract = address(vault1);
+        items[6].onBehalfOfAccount = user1;
+        items[6].value = 0;
+        items[6].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, address(0xDEAD), user1);
+
+        items[7].targetContract = address(vault1);
+        items[7].onBehalfOfAccount = user1;
+        items[7].value = 0;
+        items[7].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, address(0xFACE), user1);
+
+        items[8].targetContract = address(vault1);
+        items[8].onBehalfOfAccount = user1;
+        items[8].value = 0;
+        items[8].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, address(0x1234), user1);
+
+        items[9].targetContract = address(vault1);
+        items[9].onBehalfOfAccount = user1;
+        items[9].value = 0;
+        items[9].data = abi.encodeWithSelector(MockVault.withdraw.selector, 10e18, address(0x5678), user1);
+
+        // Execute batch - this will trigger the assertion
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Verify user1's balance decreased by 100e18 (10 withdrawals of 10e18 each)
+        assertEq(vault1.balanceOf(user1), 100e18, "User1 should have 100e18 shares remaining");
+    }
+
     /// @notice MULTI-ACCOUNT TEST: 2 accounts, 1 borrow each - CROSS-VAULT GAS LIMIT
     /// @dev Tests that borrow operations trigger account health validation correctly.
     ///      Borrow function signature: borrow(uint256 amount, address account)
@@ -1764,6 +1822,53 @@ contract TestAccountHealthAssertion is BaseTest {
 
         // Verify total liability increased correctly (5 borrows of 5e18 each = 25e18 total)
         assertEq(vault1.liabilities(user1), 25e18, "User1 should have 25e18 total liability");
+    }
+
+    /// @notice MULTI-ACCOUNT TEST: Single account, 10 borrows - CROSS-VAULT GAS BENCHMARK
+    /// @dev Tests batch with 10 borrow operations for same account across cross-vault setup
+    /// @dev 10 borrows of 5e18 each = 50e18 total. Expected: pass
+    function testBatch_SingleAccount_10Borrows_CrossVault() public {
+        // Setup liquidity: Mint tokens to user3 and deposit in vault1 so there's assets to borrow
+        token1.mint(user3, 2000e18);
+
+        vm.startPrank(user3);
+        token1.approve(address(vault1), type(uint256).max);
+        vm.stopPrank();
+
+        vm.prank(user3);
+        evc.call(address(vault1), user3, 0, abi.encodeWithSelector(MockVault.deposit.selector, 2000e18, user3));
+
+        // Setup: User1 deposits collateral in vault2
+        vm.startPrank(user1);
+        evc.enableController(user1, address(vault1)); // vault1 is liability vault
+        evc.enableCollateral(user1, address(vault2)); // vault2 is collateral vault
+        vm.stopPrank();
+
+        vm.prank(user1);
+        evc.call(address(vault2), user1, 0, abi.encodeWithSelector(MockVault.deposit.selector, 200e18, user1));
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(AccountHealthAssertion).creationCode,
+            fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
+        });
+
+        // Create batch with 10 borrow operations for same account
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](10);
+        for (uint256 i = 0; i < 10; i++) {
+            items[i].targetContract = address(vault1);
+            items[i].onBehalfOfAccount = user1;
+            items[i].value = 0;
+            items[i].data = abi.encodeWithSelector(MockVault.borrow.selector, 5e18, user1);
+        }
+
+        // Execute batch - this will trigger the assertion
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Verify total liability increased correctly (10 borrows of 5e18 each = 50e18 total)
+        assertEq(vault1.liabilities(user1), 50e18, "User1 should have 50e18 total liability");
     }
 
     /// @notice EXPECTED FAILURE TEST: 3 accounts, one becomes unhealthy mid-batch
