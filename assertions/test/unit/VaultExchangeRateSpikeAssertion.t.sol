@@ -454,6 +454,33 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         evc.batch(items);
     }
 
+    /// @notice SCENARIO: Batch with 10 small deposit operations - gas benchmark
+    /// @dev Tests assertion performance with large batch size
+    function testExchangeRateSpike_Batch_10Operations_Passes() public {
+        // Setup: Initial deposit
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 2000e18, user1));
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
+        });
+
+        // Create batch with 10 small deposits
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](10);
+        for (uint256 i = 0; i < 10; i++) {
+            items[i].targetContract = address(vault1);
+            items[i].onBehalfOfAccount = user1;
+            items[i].value = 0;
+            items[i].data = abi.encodeWithSelector(IERC4626.deposit.selector, 1e18, user1);
+        }
+
+        vm.prank(user1);
+        evc.batch(items);
+    }
+
     // ========================================
     // BOUNDARY CONDITION TESTS
     // ========================================
