@@ -12,16 +12,18 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
     // EVC mainnet deployment
     address constant EVC_MAINNET = 0x0C9a3dd6b8F28529d72d7f9cE918D493519EE383;
 
+    address constant EVC_LINEA = 0xd8CeCEe9A04eA3d941a959F68fb4486f23271d09;
+
     // Block configuration
-    uint256 constant END_BLOCK = 23697612;
-    uint256 constant BLOCK_RANGE = 10;
+    uint256 constant END_BLOCK = 27269658;
+    uint256 constant BLOCK_RANGE = 3;
 
     /// @notice Backtest batch operations against mainnet EVC
     /// @dev Tests that all asset transfers are accounted for in batch operations
     function testBacktest_VaultAssetTransferAccounting_BatchOperations() public {
         BacktestingTypes.BacktestingResults memory results = executeBacktest(
             BacktestingTypes.BacktestingConfig({
-                targetContract: EVC_MAINNET,
+                targetContract: EVC_LINEA,
                 endBlock: END_BLOCK,
                 blockRange: BLOCK_RANGE,
                 assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
@@ -29,7 +31,7 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
@@ -66,8 +68,9 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
                 endBlock: END_BLOCK,
                 blockRange: BLOCK_RANGE,
                 assertionCreationCode: type(VaultAssetTransferAccountingAssertion).creationCode,
-                assertionSelector: VaultAssetTransferAccountingAssertion.assertionControlCollateralAssetTransferAccounting
-                .selector,
+                assertionSelector: VaultAssetTransferAccountingAssertion
+                    .assertionControlCollateralAssetTransferAccounting
+                    .selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,

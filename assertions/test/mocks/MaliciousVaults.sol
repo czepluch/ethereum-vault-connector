@@ -16,16 +16,22 @@ contract CashThiefVault is MockEVault {
 
     constructor(MockERC20 _asset, IEVC _evc) MockEVault(_asset, _evc) {}
 
-    function setStealOnWithdraw(bool _enabled) external {
+    function setStealOnWithdraw(
+        bool _enabled
+    ) external {
         stealOnWithdraw = _enabled;
     }
 
-    function setSkipCashUpdate(bool _enabled) external {
+    function setSkipCashUpdate(
+        bool _enabled
+    ) external {
         skipCashUpdate = _enabled;
     }
 
     /// @notice Corrupt cash value manually (for testing bad state)
-    function corruptCash(uint256 newCash) external {
+    function corruptCash(
+        uint256 newCash
+    ) external {
         cash = newCash;
     }
 
@@ -60,19 +66,25 @@ contract RateManipulatorVault is MockEVault {
 
     /// @notice Set inflation to apply on next deposit
     /// @param bps Basis points to inflate (e.g., 500 = 5%)
-    function setInflationBps(uint256 bps) external {
+    function setInflationBps(
+        uint256 bps
+    ) external {
         inflationBps = bps;
     }
 
     /// @notice Set deflation to apply on next deposit
     /// @param bps Basis points to deflate (e.g., 500 = 5%)
-    function setDeflationBps(uint256 bps) external {
+    function setDeflationBps(
+        uint256 bps
+    ) external {
         deflationBps = bps;
     }
 
     /// @notice Inflate totalAssets by percentage (for testing outside of transactions)
     /// @param percentage Percentage to inflate (e.g., 10 = 10%)
-    function inflateTotalAssets(uint256 percentage) external {
+    function inflateTotalAssets(
+        uint256 percentage
+    ) external {
         uint256 current = totalAssets();
         uint256 inflation = (current * percentage) / 100;
         MockERC20(asset()).mint(address(this), inflation);
@@ -80,7 +92,9 @@ contract RateManipulatorVault is MockEVault {
 
     /// @notice Deflate totalAssets by percentage (for testing outside of transactions)
     /// @param percentage Percentage to deflate (e.g., 10 = 10%)
-    function deflateTotalAssets(uint256 percentage) external {
+    function deflateTotalAssets(
+        uint256 percentage
+    ) external {
         uint256 current = totalAssets();
         uint256 deflation = (current * percentage) / 100;
         // Burn tokens to simulate loss
@@ -109,6 +123,22 @@ contract RateManipulatorVault is MockEVault {
     }
 }
 
+/// @title MockNonVaultContract
+/// @notice A contract that doesn't implement ERC4626 (simulates Permit2, routers, etc.)
+/// @dev Used for testing that assertions gracefully handle non-vault contracts in batches
+contract MockNonVaultContract {
+    event SomethingDone(address sender);
+
+    /// @notice A simple function that doesn't have anything to do with vaults
+    function doSomething() external returns (bool) {
+        emit SomethingDone(msg.sender);
+        return true;
+    }
+
+    // Note: This contract intentionally does NOT have an asset() function
+    // to test that assertions handle this gracefully
+}
+
 /// @title EventManipulatorVault
 /// @notice Malicious vault that transfers assets without emitting proper events
 /// @dev Used for testing VaultAssetTransferAccountingAssertion
@@ -121,19 +151,27 @@ contract EventManipulatorVault is MockEVault {
 
     constructor(IERC20 _asset, IEVC _evc) MockEVault(_asset, _evc) {}
 
-    function setShouldSkipWithdrawEvent(bool value) external {
+    function setShouldSkipWithdrawEvent(
+        bool value
+    ) external {
         shouldSkipWithdrawEvent = value;
     }
 
-    function setShouldSkipBorrowEvent(bool value) external {
+    function setShouldSkipBorrowEvent(
+        bool value
+    ) external {
         shouldSkipBorrowEvent = value;
     }
 
-    function setShouldUnderreportAmount(bool value) external {
+    function setShouldUnderreportAmount(
+        bool value
+    ) external {
         shouldUnderreportAmount = value;
     }
 
-    function setShouldMakeExtraTransfer(bool value) external {
+    function setShouldMakeExtraTransfer(
+        bool value
+    ) external {
         shouldMakeExtraTransfer = value;
     }
 

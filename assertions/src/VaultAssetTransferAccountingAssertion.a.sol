@@ -210,10 +210,16 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
 
     /// @notice Gets the asset token address for a vault
     /// @param vault The vault address to query
-    /// @return The asset token address
+    /// @return The asset token address, or address(0) if the call fails
+    /// @dev Uses try/catch to safely handle non-ERC4626 contracts in batch items
+    ///      (e.g., Permit2, routers, or other helper contracts)
     function getAssetAddress(
         address vault
     ) internal view returns (address) {
-        return IERC4626(vault).asset();
+        try IERC4626(vault).asset() returns (address asset) {
+            return asset;
+        } catch {
+            return address(0);
+        }
     }
 }
