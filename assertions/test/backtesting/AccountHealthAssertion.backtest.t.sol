@@ -34,7 +34,7 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
     }
@@ -70,7 +70,7 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: true,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
     }
@@ -106,7 +106,7 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
     }

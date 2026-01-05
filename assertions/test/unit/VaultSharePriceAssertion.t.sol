@@ -141,7 +141,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Execute batch call - should fail
         vm.prank(user1);
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
         evc.batch(items);
     }
 
@@ -260,7 +260,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Execute single call that decreases share price without bad debt socialization
         vm.prank(user1);
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
         evc.call(
             address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
@@ -323,7 +323,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Execute control collateral call that decreases share price without bad debt socialization
         vm.prank(address(controllerVault));
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
         evc.controlCollateral(
             address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
@@ -407,6 +407,37 @@ contract TestVaultSharePriceAssertion is BaseTest {
     }
 
 
+    /// @notice Tests share price decrease with InterestAccrued event (EVK fee mechanism)
+    /// @dev Expected: pass - InterestAccrued indicates legitimate fee dilution per EVK whitepaper
+    /// Per EVK whitepaper: "The interest fees are charged by creating the amount of shares necessary
+    /// to dilute depositors by the interestFee fraction of the interest"
+    function testVaultSharePriceAssertion_SharePriceDecreaseWithInterestAccrued_Passes() public {
+        // Setup vault with initial state
+        token1.mint(address(vault1), 1000e18);
+        vault1.setTotalAssets(1000e18);
+        vault1.mint(1000e18, user1); // Share price = 1.0
+
+        // Create batch call that decreases share price with InterestAccrued event
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(vault1);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseSharePriceWithInterestAccrued.selector, 1e18);
+
+        // Register assertion for the batch call
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
+        });
+
+        // Execute batch call - this will trigger the assertion
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Assertion should pass - share price decreased but with InterestAccrued event (legitimate fee dilution)
+    }
+
     /// @notice Tests zero assets but non-zero shares - should handle edge case
     /// @dev Expected: pass handles zero asset edge case
     /// NOTE: This represents an extreme loss scenario - assertion should not revert on math errors
@@ -465,6 +496,10 @@ contract MockERC4626Vault is ERC4626 {
     // Events for bad debt socialization simulation
     event Repay(address indexed account, uint256 assets);
 
+    // Event for interest fee mechanism simulation (per EVK whitepaper)
+    // This event indicates that interest fees are being charged, which causes depositor dilution
+    event InterestAccrued(address indexed account, uint256 assets);
+
     constructor(
         ERC20 assetToken
     ) ERC4626(assetToken) ERC20("Mock Vault", "MV") {}
@@ -508,6 +543,24 @@ contract MockERC4626Vault is ERC4626 {
         address liquidator = address(0x1234567890123456789012345678901234567890); // Mock liquidator
         emit Repay(liquidator, amount);
         emit Withdraw(address(0), address(0), address(0), amount, 0);
+    }
+
+    /// @notice Simulates share price decrease due to EVK interest fee mechanism
+    /// @dev Per EVK whitepaper: "The interest fees are charged by creating the amount of shares
+    /// necessary to dilute depositors by the interestFee fraction of the interest"
+    /// The InterestAccrued event indicates this fee mechanism is operating
+    function decreaseSharePriceWithInterestAccrued(
+        uint256 amount
+    ) external {
+        require(_totalAssets >= amount, "Insufficient assets");
+        _totalAssets -= amount;
+        // Keep total supply the same to simulate dilution effect
+        // In reality, shares are minted to fee receiver which dilutes existing depositors
+
+        // Emit InterestAccrued event to simulate legitimate fee dilution
+        // This is the signal that interest fees are being charged (expected behavior)
+        address borrower = address(0xBEEF); // Mock borrower
+        emit InterestAccrued(borrower, amount);
     }
 
     function noOp() external {

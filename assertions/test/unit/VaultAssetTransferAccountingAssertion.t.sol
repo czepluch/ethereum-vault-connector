@@ -9,7 +9,7 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 // Import shared mocks
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
-import {EventManipulatorVault} from "../mocks/MaliciousVaults.sol";
+import {EventManipulatorVault, MockNonVaultContract, WrapperVault} from "../mocks/MaliciousVaults.sol";
 
 /// @title TestVaultAssetTransferAccountingAssertion
 /// @notice Comprehensive test suite for the VaultAssetTransferAccountingAssertion assertion
@@ -664,6 +664,105 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
 
         vm.prank(user1);
         evc.batch(items);
+    }
+
+    // ========================================
+    // NESTED VAULT / WRAPPER VAULT TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Wrapper vault deposits into underlying yield vault
+    /// @dev Verifies assertion correctly accounts for vault-to-vault deposits
+    ///      This was discovered in production where Tulipa ETH Earn deposits into EVK vaults.
+    ///
+    /// TEST SETUP:
+    /// - User deposits into wrapper vault (vault1)
+    /// - Wrapper vault internally deposits those assets into underlying vault (vault2)
+    /// - Transfer event: from=vault1, to=vault2
+    /// - Deposit event: sender=vault1, owner=vault1 emitted by vault2
+    ///
+    /// EXPECTED RESULT: Assertion passes (Deposit event accounts for the transfer)
+    function testAssetTransferAccounting_Batch_NestedVaultDeposit_Passes() public {
+        // Deploy a wrapper vault that deposits into underlying vault
+        WrapperVault wrapperVault = new WrapperVault(token1, evc, vault1);
+
+        // Approve wrapper vault
+        vm.prank(user1);
+        token1.approve(address(wrapperVault), type(uint256).max);
+
+        // Create batch with deposit to wrapper vault
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(wrapperVault);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(IERC4626.deposit.selector, 100e18, user1);
+
+        // Register assertion for the batch call
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
+        });
+
+        // Execute batch call - should pass because:
+        // 1. User transfers to wrapperVault (not counted - from != vault)
+        // 2. wrapperVault transfers to vault1 (counted as totalTransferred)
+        // 3. vault1 emits Deposit event with sender=wrapperVault (counted as totalDepositedToUnderlying)
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Assertion should pass - nested vault deposits are accounted for
+    }
+
+    // ========================================
+    // NON-ERC4626 CONTRACT HANDLING TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Batch contains non-ERC4626 contract (like Permit2)
+    /// @dev Verifies assertion gracefully skips contracts without asset() function
+    ///      This was the root cause of a production false positive where Permit2
+    ///      was included in a batch and calling asset() on it caused a revert.
+    ///
+    /// TEST SETUP:
+    /// - Batch contains: non-ERC4626 contract + vault withdrawal
+    /// - Non-ERC4626 contract has no asset() function
+    /// - Vault has proper withdrawal with events
+    ///
+    /// EXPECTED RESULT: Assertion passes (non-ERC4626 contract is skipped)
+    function testAssetTransferAccounting_Batch_NonERC4626Contract_Passes() public {
+        // Deploy a mock contract that doesn't have asset() function (simulates Permit2)
+        MockNonVaultContract nonVaultContract = new MockNonVaultContract();
+
+        // Setup: Deposit to vault
+        vm.prank(user1);
+        evc.call(address(vault1), user1, 0, abi.encodeWithSelector(IERC4626.deposit.selector, 100e18, user1));
+
+        // Create batch with non-vault contract and normal vault operation
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](2);
+
+        // First item: call to non-ERC4626 contract (like Permit2 permitTransferFrom)
+        items[0].targetContract = address(nonVaultContract);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(MockNonVaultContract.doSomething.selector);
+
+        // Second item: normal vault withdrawal
+        items[1].targetContract = address(vault1);
+        items[1].onBehalfOfAccount = user1;
+        items[1].value = 0;
+        items[1].data = abi.encodeWithSelector(IERC4626.withdraw.selector, 50e18, user1, user1);
+
+        // Register assertion for the batch call
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
+        });
+
+        // Execute batch call - should pass (non-vault contract is gracefully skipped)
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Assertion should pass - non-ERC4626 contracts are skipped via try/catch
     }
 
     // ========================================
