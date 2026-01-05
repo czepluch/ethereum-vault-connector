@@ -8,9 +8,9 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @title VaultAssetTransferAccountingAssertion
-/// @notice Ensures all asset transfers from vaults are properly accounted for by Withdraw or Borrow events
+/// @notice Ensures all asset transfers from vaults are properly accounted for by Withdraw, Borrow, or Deposit events
 /// @dev This assertion monitors event logs to validate that every asset token transfer leaving a vault
-///      is accompanied by a corresponding Withdraw or Borrow event with matching amount.
+///      is accompanied by a corresponding Withdraw, Borrow, or Deposit-to-underlying event with matching amount.
 ///
 /// @custom:invariant VAULT_ASSET_TRANSFER_ACCOUNTING_INVARIANT
 /// For any vault V, any transaction T, and the asset token A = V.asset():
@@ -23,16 +23,21 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 ///                    emitted by V in transaction T
 /// - borrowEvents = all Borrow(address account, uint256 assets) events
 ///                  emitted by V in transaction T
+/// - depositToUnderlyingEvents = all Deposit(address sender, address owner, uint256 assets, uint256 shares) events
+///                               emitted by ANY contract where sender == V OR owner == V in transaction T
+///                               (this captures nested vault deposits and yield strategy deposits)
 /// - totalTransferred = sum of all amounts in transferEvents
 /// - totalWithdrawn = sum of all assets in withdrawEvents
 /// - totalBorrowed = sum of all assets in borrowEvents
-/// - totalAccounted = totalWithdrawn + totalBorrowed
+/// - totalDepositedToUnderlying = sum of all assets in depositToUnderlyingEvents
+/// - totalAccounted = totalWithdrawn + totalBorrowed + totalDepositedToUnderlying
 ///
 /// Then the following invariant must hold:
 /// totalTransferred <= totalAccounted
 ///
 /// In plain English:
-/// "Every asset token that leaves the vault must be accounted for by a Withdraw or Borrow event"
+/// "Every asset token that leaves the vault must be accounted for by a Withdraw, Borrow, or Deposit-to-underlying
+/// event"
 ///
 /// This invariant protects against:
 /// - Unauthorized asset extraction without proper event emission
@@ -44,6 +49,8 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 /// While allowing legitimate scenarios:
 /// - Normal withdrawals with Withdraw events
 /// - Normal borrows with Borrow events
+/// - Nested vault deposits (wrapper vaults depositing into underlying yield vaults)
+/// - Yield strategy rebalancing (vault moving assets between strategies)
 /// - Multiple operations in same transaction (sum of all transfers matched against sum of all events)
 /// - Flash loans (assets transferred out and returned in same tx, net should match events)
 ///
@@ -141,7 +148,7 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
         }
     }
 
-    /// @notice Validates all asset transfers are accounted for by Withdraw or Borrow events
+    /// @notice Validates all asset transfers are accounted for by Withdraw, Borrow, or Deposit-to-underlying events
     /// @param vault The vault address to validate
     function validateVaultAssetTransferAccounting(
         address vault
@@ -157,10 +164,12 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
         bytes32 transferEventSig = keccak256("Transfer(address,address,uint256)");
         bytes32 withdrawEventSig = keccak256("Withdraw(address,address,address,uint256,uint256)");
         bytes32 borrowEventSig = keccak256("Borrow(address,uint256)");
+        bytes32 depositEventSig = keccak256("Deposit(address,address,uint256,uint256)");
 
         uint256 totalTransferred = 0;
         uint256 totalWithdrawn = 0;
         uint256 totalBorrowed = 0;
+        uint256 totalDepositedToUnderlying = 0;
 
         // Parse all logs and sum amounts
         for (uint256 i = 0; i < logs.length; i++) {
@@ -198,10 +207,28 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
                     totalBorrowed += assets;
                 }
             }
+
+            // Check Deposit events where vault deposited to ANOTHER vault (nested vault pattern)
+            // Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)
+            // This captures: wrapper vaults depositing into underlying yield vaults,
+            // yield strategy rebalancing, and similar legitimate asset movements
+            if (log.emitter != vault && log.topics.length >= 3) {
+                if (log.topics[0] == depositEventSig) {
+                    address sender = address(uint160(uint256(log.topics[1])));
+                    address owner = address(uint160(uint256(log.topics[2])));
+
+                    // If our vault is the depositor (sender or owner), count as accounted
+                    if (sender == vault || owner == vault) {
+                        // Assets amount is first field in data
+                        (uint256 assets,) = abi.decode(log.data, (uint256, uint256));
+                        totalDepositedToUnderlying += assets;
+                    }
+                }
+            }
         }
 
-        // Validate invariant: totalTransferred <= totalWithdrawn + totalBorrowed
-        uint256 totalAccounted = totalWithdrawn + totalBorrowed;
+        // Validate invariant: totalTransferred <= totalWithdrawn + totalBorrowed + totalDepositedToUnderlying
+        uint256 totalAccounted = totalWithdrawn + totalBorrowed + totalDepositedToUnderlying;
         require(
             totalTransferred <= totalAccounted,
             "VaultAssetTransferAccountingAssertion: Unaccounted asset transfers detected"

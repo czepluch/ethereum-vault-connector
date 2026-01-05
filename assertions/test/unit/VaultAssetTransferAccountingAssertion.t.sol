@@ -9,7 +9,7 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 // Import shared mocks
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
-import {EventManipulatorVault, MockNonVaultContract} from "../mocks/MaliciousVaults.sol";
+import {EventManipulatorVault, MockNonVaultContract, WrapperVault} from "../mocks/MaliciousVaults.sol";
 
 /// @title TestVaultAssetTransferAccountingAssertion
 /// @notice Comprehensive test suite for the VaultAssetTransferAccountingAssertion assertion
@@ -664,6 +664,53 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
 
         vm.prank(user1);
         evc.batch(items);
+    }
+
+    // ========================================
+    // NESTED VAULT / WRAPPER VAULT TESTS
+    // ========================================
+
+    /// @notice SCENARIO: Wrapper vault deposits into underlying yield vault
+    /// @dev Verifies assertion correctly accounts for vault-to-vault deposits
+    ///      This was discovered in production where Tulipa ETH Earn deposits into EVK vaults.
+    ///
+    /// TEST SETUP:
+    /// - User deposits into wrapper vault (vault1)
+    /// - Wrapper vault internally deposits those assets into underlying vault (vault2)
+    /// - Transfer event: from=vault1, to=vault2
+    /// - Deposit event: sender=vault1, owner=vault1 emitted by vault2
+    ///
+    /// EXPECTED RESULT: Assertion passes (Deposit event accounts for the transfer)
+    function testAssetTransferAccounting_Batch_NestedVaultDeposit_Passes() public {
+        // Deploy a wrapper vault that deposits into underlying vault
+        WrapperVault wrapperVault = new WrapperVault(token1, evc, vault1);
+
+        // Approve wrapper vault
+        vm.prank(user1);
+        token1.approve(address(wrapperVault), type(uint256).max);
+
+        // Create batch with deposit to wrapper vault
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(wrapperVault);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data = abi.encodeWithSelector(IERC4626.deposit.selector, 100e18, user1);
+
+        // Register assertion for the batch call
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
+        });
+
+        // Execute batch call - should pass because:
+        // 1. User transfers to wrapperVault (not counted - from != vault)
+        // 2. wrapperVault transfers to vault1 (counted as totalTransferred)
+        // 3. vault1 emits Deposit event with sender=wrapperVault (counted as totalDepositedToUnderlying)
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Assertion should pass - nested vault deposits are accounted for
     }
 
     // ========================================

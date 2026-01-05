@@ -139,6 +139,34 @@ contract MockNonVaultContract {
     // to test that assertions handle this gracefully
 }
 
+/// @title WrapperVault
+/// @notice A wrapper vault that deposits into an underlying vault (like Tulipa ETH Earn -> EVK Vault)
+/// @dev Used for testing nested vault deposit handling in assertions
+contract WrapperVault is MockEVault {
+    MockEVault public underlyingVault;
+
+    constructor(IERC20 _asset, IEVC _evc, MockEVault _underlyingVault) MockEVault(_asset, _evc) {
+        underlyingVault = _underlyingVault;
+        // Approve underlying vault to spend our tokens
+        _asset.approve(address(_underlyingVault), type(uint256).max);
+    }
+
+    /// @notice Override deposit to also deposit into underlying vault
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        // First, do the normal deposit (pull tokens from user, mint shares)
+        uint256 shares = super.deposit(assets, receiver);
+
+        // Then, deposit all received assets into underlying vault
+        // This creates the nested vault pattern where:
+        // 1. Transfer: user -> wrapperVault (not counted, from != vault)
+        // 2. Transfer: wrapperVault -> underlyingVault (counted as totalTransferred)
+        // 3. Deposit event from underlyingVault with sender=wrapperVault (counted as totalDepositedToUnderlying)
+        underlyingVault.deposit(assets, address(this));
+
+        return shares;
+    }
+}
+
 /// @title EventManipulatorVault
 /// @notice Malicious vault that transfers assets without emitting proper events
 /// @dev Used for testing VaultAssetTransferAccountingAssertion
