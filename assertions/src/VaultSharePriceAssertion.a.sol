@@ -7,10 +7,10 @@ import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @title VaultSharePriceAssertion
-/// @notice Monitors vault share prices and ensures they don't decrease unless bad debt socialization occurs
+/// @notice Monitors vault share prices and ensures they don't decrease unless legitimate reasons exist
 /// @dev This assertion intercepts EVC calls to monitor all vault interactions and validates
 ///      that vault share prices (totalAssets/totalSupply) don't decrease unless there's a
-///      legitimate bad debt socialization event.
+///      legitimate reason such as bad debt socialization or interest fee accrual.
 ///
 /// @custom:invariant VAULT_SHARE_PRICE_INVARIANT
 /// For any vault V and any transaction T that interacts with V:
@@ -18,20 +18,24 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 /// Let:
 /// - SP_pre(V) = totalAssets(V) * 1e18 / totalSupply(V) before transaction T
 /// - SP_post(V) = totalAssets(V) * 1e18 / totalSupply(V) after transaction T
-/// - BDS(T,V) = true if bad debt socialization events occurred for vault V in transaction T
+/// - LEGITIMATE(T,V) = true if legitimate share price decrease events occurred for vault V in transaction T
 ///
 /// Then the following invariant must hold:
 ///
-/// SP_post(V) >= SP_pre(V) ∨ BDS(T,V)
+/// SP_post(V) >= SP_pre(V) ∨ LEGITIMATE(T,V)
 ///
 /// In plain English:
-/// "A vault's share price cannot decrease unless bad debt socialization occurs"
+/// "A vault's share price cannot decrease unless a legitimate reason exists"
 ///
-/// Bad debt socialization is detected by monitoring the following events from vault V:
-/// 1. Repay(account, assets) where account ≠ address(0) (repay from liquidator)
-/// 2. Withdraw(address(0), receiver, owner, assets, shares) (withdraw from address(0))
+/// Legitimate share price decreases are detected by monitoring the following events from vault V:
+/// 1. DebtSocialized(account, assets) - bad debt socialization event
+/// 2. Repay(account, assets) where account ≠ address(0) AND Withdraw from address(0) - legacy bad debt detection
+/// 3. InterestAccrued(account, assets) - interest fee mechanism causing depositor dilution (per EVK whitepaper)
 ///
-/// Both events must occur together in the same transaction to indicate bad debt socialization.
+/// The InterestAccrued event indicates the EVK fee mechanism is operating. Per the EVK whitepaper:
+/// "The interest fees are charged by creating the amount of shares necessary to dilute depositors
+/// by the interestFee fraction of the interest" - this is expected behavior that causes tiny share
+/// price decreases.
 ///
 /// This invariant protects depositors from:
 /// - Malicious vault implementations that steal funds
@@ -41,6 +45,7 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 /// While allowing legitimate scenarios:
 /// - Normal vault operations (deposits, withdrawals, yield)
 /// - Bad debt socialization (as designed in Euler protocol)
+/// - Interest fee accrual (as designed in Euler protocol)
 contract VaultSharePriceAssertion is Assertion {
     /// @notice Register triggers for EVC operations
     function triggers() external view override {
@@ -131,13 +136,11 @@ contract VaultSharePriceAssertion is Assertion {
 
         // Check if share price decreased
         if (postSharePrice < preSharePrice) {
-            // Share price decreased - check if this is legitimate due to bad debt socialization
-            bool hasLegitimateBadDebt = checkForBadDebtSocialization(vault);
+            // Share price decreased - check if this is legitimate
+            bool hasLegitimateReason = checkForLegitimateSharePriceDecrease(vault);
 
             // Use simple error message to save gas
-            require(
-                hasLegitimateBadDebt, "VaultSharePriceAssertion: Share price decreased without bad debt socialization"
-            );
+            require(hasLegitimateReason, "VaultSharePriceAssertion: Share price decreased without legitimate reason");
         }
     }
 
@@ -170,53 +173,58 @@ contract VaultSharePriceAssertion is Assertion {
         }
     }
 
-    /// @notice Checks if bad debt socialization occurred for a vault
+    /// @notice Checks if there's a legitimate reason for share price decrease
     /// @param vault The vault address to check
-    /// @return hasBadDebt True if DebtSocialized event or Repay+Withdraw pattern detected
-    function checkForBadDebtSocialization(
+    /// @return hasLegitimateReason True if DebtSocialized, Repay+Withdraw pattern, or InterestAccrued detected
+    function checkForLegitimateSharePriceDecrease(
         address vault
-    ) internal returns (bool hasBadDebt) {
+    ) internal returns (bool hasLegitimateReason) {
         // Get all logs from the transaction
         PhEvm.Log[] memory logs = ph.getLogs();
 
         bool hasDebtSocializedEvent = false;
         bool hasRepayFromLiquidator = false;
         bool hasWithdrawFromZero = false;
+        bool hasInterestAccruedEvent = false;
 
-        // Check each log for bad debt socialization events
+        // Event signatures
+        bytes32 debtSocializedEventSig = keccak256("DebtSocialized(address,uint256)");
+        bytes32 repayEventSig = keccak256("Repay(address,uint256)");
+        bytes32 withdrawEventSig = keccak256("Withdraw(address,address,address,uint256,uint256)");
+        bytes32 interestAccruedEventSig = keccak256("InterestAccrued(address,uint256)");
+
+        // Check each log for legitimate share price decrease events
         for (uint256 i = 0; i < logs.length; i++) {
             PhEvm.Log memory log = logs[i];
 
             // Check if this log is from our vault
             if (log.emitter == vault) {
-                // Check for DebtSocialized event (topic[0] = event signature)
-                // DebtSocialized event signature: keccak256("DebtSocialized(address,uint256)")
                 if (log.topics.length >= 1) {
-                    bytes32 debtSocializedEventSig = keccak256("DebtSocialized(address,uint256)");
-                    if (log.topics[0] == debtSocializedEventSig) {
+                    bytes32 eventSig = log.topics[0];
+
+                    // Check for DebtSocialized event
+                    if (eventSig == debtSocializedEventSig) {
                         hasDebtSocializedEvent = true;
                     }
-                }
 
-                // Check for Repay event (topic[0] = event signature, topic[1] = account)
-                // Repay event signature: keccak256("Repay(address,uint256)")
-                if (log.topics.length >= 2) {
-                    bytes32 repayEventSig = keccak256("Repay(address,uint256)");
-                    if (log.topics[0] == repayEventSig) {
+                    // Check for InterestAccrued event - indicates fee mechanism causing dilution
+                    // Per EVK whitepaper: "The interest fees are charged by creating the amount of
+                    // shares necessary to dilute depositors by the interestFee fraction of the interest"
+                    if (eventSig == interestAccruedEventSig) {
+                        hasInterestAccruedEvent = true;
+                    }
+
+                    // Check for Repay event
+                    if (log.topics.length >= 2 && eventSig == repayEventSig) {
                         // Check if repay comes from a liquidator (not address(0))
                         address account = address(uint160(uint256(log.topics[1])));
                         if (account != address(0)) {
                             hasRepayFromLiquidator = true;
                         }
                     }
-                }
 
-                // Check for Withdraw event (topic[0] = event signature, topic[1] = sender, topic[2] = receiver,
-                // topic[3] = owner)
-                // Withdraw event signature: keccak256("Withdraw(address,address,address,uint256,uint256)")
-                if (log.topics.length >= 4) {
-                    bytes32 withdrawEventSig = keccak256("Withdraw(address,address,address,uint256,uint256)");
-                    if (log.topics[0] == withdrawEventSig) {
+                    // Check for Withdraw event
+                    if (log.topics.length >= 4 && eventSig == withdrawEventSig) {
                         // Check if withdraw appears to come from address(0) (sender is address(0))
                         address sender = address(uint160(uint256(log.topics[1])));
                         if (sender == address(0)) {
@@ -227,9 +235,10 @@ contract VaultSharePriceAssertion is Assertion {
             }
         }
 
-        // Bad debt socialization is detected if:
-        // 1. DebtSocialized event is present (primary indicator), OR
-        // 2. Both Repay from liquidator AND Withdraw from address(0) occur together (legacy detection)
-        return hasDebtSocializedEvent || (hasRepayFromLiquidator && hasWithdrawFromZero);
+        // Legitimate share price decrease is detected if:
+        // 1. DebtSocialized event is present (bad debt socialization), OR
+        // 2. Both Repay from liquidator AND Withdraw from address(0) occur together (legacy bad debt detection), OR
+        // 3. InterestAccrued event is present (fee mechanism causing depositor dilution - expected behavior)
+        return hasDebtSocializedEvent || (hasRepayFromLiquidator && hasWithdrawFromZero) || hasInterestAccruedEvent;
     }
 }

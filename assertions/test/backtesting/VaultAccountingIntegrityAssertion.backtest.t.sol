@@ -29,7 +29,7 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
@@ -50,7 +50,7 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
@@ -71,7 +71,7 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 

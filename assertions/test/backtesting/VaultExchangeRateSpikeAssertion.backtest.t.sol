@@ -29,7 +29,7 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
@@ -50,7 +50,7 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
@@ -70,7 +70,7 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 

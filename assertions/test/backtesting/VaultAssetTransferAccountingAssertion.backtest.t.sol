@@ -15,7 +15,7 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
     address constant EVC_LINEA = 0xd8CeCEe9A04eA3d941a959F68fb4486f23271d09;
 
     // Block configuration
-    uint256 constant END_BLOCK = 27269658;
+    uint256 constant END_BLOCK = 27419134;
     uint256 constant BLOCK_RANGE = 3;
 
     /// @notice Backtest batch operations against mainnet EVC
@@ -52,7 +52,7 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
@@ -74,7 +74,7 @@ contract VaultAssetTransferAccountingAssertionBacktest is CredibleTestWithBackte
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
-                forkByTxHash: false
+                forkByTxHash: true
             })
         );
 
