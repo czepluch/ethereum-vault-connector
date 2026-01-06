@@ -104,7 +104,7 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
 
         // Execute batch call - should REVERT (rate decrease exceeds 5% without bad debt)
         vm.prank(user1);
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.batch(items);
     }
 

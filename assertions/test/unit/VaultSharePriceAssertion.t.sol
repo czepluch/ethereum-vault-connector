@@ -141,7 +141,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Execute batch call - should fail
         vm.prank(user1);
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.batch(items);
     }
 
@@ -260,7 +260,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Execute single call that decreases share price without bad debt socialization
         vm.prank(user1);
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.call(
             address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
@@ -323,7 +323,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Execute control collateral call that decreases share price without bad debt socialization
         vm.prank(address(controllerVault));
-        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without legitimate reason");
+        vm.expectRevert("VaultSharePriceAssertion: Share price decreased without bad debt socialization");
         evc.controlCollateral(
             address(vault1), user1, 0, abi.encodeWithSelector(MockERC4626Vault.decreaseSharePrice.selector, 100e18)
         );
@@ -406,38 +406,6 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Assertion should pass - zero total supply is handled gracefully
     }
 
-
-    /// @notice Tests share price decrease with InterestAccrued event (EVK fee mechanism)
-    /// @dev Expected: pass - InterestAccrued indicates legitimate fee dilution per EVK whitepaper
-    /// Per EVK whitepaper: "The interest fees are charged by creating the amount of shares necessary
-    /// to dilute depositors by the interestFee fraction of the interest"
-    function testVaultSharePriceAssertion_SharePriceDecreaseWithInterestAccrued_Passes() public {
-        // Setup vault with initial state
-        token1.mint(address(vault1), 1000e18);
-        vault1.setTotalAssets(1000e18);
-        vault1.mint(1000e18, user1); // Share price = 1.0
-
-        // Create batch call that decreases share price with InterestAccrued event
-        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
-        items[0].targetContract = address(vault1);
-        items[0].onBehalfOfAccount = user1;
-        items[0].value = 0;
-        items[0].data = abi.encodeWithSelector(MockERC4626Vault.decreaseSharePriceWithInterestAccrued.selector, 1e18);
-
-        // Register assertion for the batch call
-        cl.assertion({
-            adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
-            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
-        });
-
-        // Execute batch call - this will trigger the assertion
-        vm.prank(user1);
-        evc.batch(items);
-
-        // Assertion should pass - share price decreased but with InterestAccrued event (legitimate fee dilution)
-    }
-
     /// @notice Tests zero assets but non-zero shares - should handle edge case
     /// @dev Expected: pass handles zero asset edge case
     /// NOTE: This represents an extreme loss scenario - assertion should not revert on math errors
@@ -486,6 +454,89 @@ contract TestVaultSharePriceAssertion is BaseTest {
 
         // Assertion should pass - handles zero assets / non-zero shares edge case
     }
+
+    /// @notice Tests that VIRTUAL_DEPOSIT formula prevents false positives on small vaults
+    /// @dev This test replicates the exact scenario from Linea tx 0x4ec425f3... where a small vault
+    /// (~279 USDC) had a deposit that appeared to decrease share price without VIRTUAL_DEPOSIT,
+    /// but actually increased when using Euler's correct formula with VIRTUAL_DEPOSIT_AMOUNT (1e6).
+    ///
+    /// The math:
+    /// - Pre-tx:  totalAssets=279193303, totalSupply=261048732, ratio=1.069506451
+    /// - Deposit: +25468 assets, +23816 shares (ratio=1.0694 < existing ratio)
+    /// - Post-tx: totalAssets=279218771, totalSupply=261072548
+    ///
+    /// WITHOUT VIRTUAL_DEPOSIT (1e6):
+    ///   Pre:  279193303 / 261048732 = 1.069506451
+    ///   Post: 279218771 / 261072548 = 1.069506438
+    ///   Result: DECREASE (false positive!)
+    ///
+    /// WITH VIRTUAL_DEPOSIT (1e6):
+    ///   Pre:  (279193303 + 1e6) / (261048732 + 1e6) = 1.069241209
+    ///   Post: (279218771 + 1e6) / (261072548 + 1e6) = 1.069241220
+    ///   Result: INCREASE (correct!)
+    function testVaultSharePriceAssertion_SmallVaultDeposit_VirtualDepositPreventsFalsePositive() public {
+        // Deploy a fresh mock vault for this specific test
+        MockERC4626Vault smallVault = new MockERC4626Vault(token1);
+
+        // Set up the exact pre-transaction state from Linea tx
+        // These are USDC values (6 decimals), scaled values from the real transaction
+        uint256 preAssets = 279193303;
+        uint256 preSupply = 261048732;
+
+        // Mint tokens to cover assets
+        token1.mint(address(smallVault), preAssets);
+        smallVault.setTotalAssets(preAssets);
+        smallVault.mint(preSupply, user1);
+
+        // Verify initial state
+        assertEq(smallVault.totalAssets(), preAssets, "Pre assets mismatch");
+        assertEq(smallVault.totalSupply(), preSupply, "Pre supply mismatch");
+
+        // The deposit that caused the false positive:
+        // +25468 assets, +23816 shares (ratio 1.0694, below existing 1.0695)
+        uint256 depositAssets = 25468;
+        uint256 depositShares = 23816;
+
+        // Register assertion
+        cl.assertion({
+            adopter: address(evc),
+            createData: type(VaultSharePriceAssertion).creationCode,
+            fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
+        });
+
+        // Create batch call that simulates the deposit
+        IEVC.BatchItem[] memory items = new IEVC.BatchItem[](1);
+        items[0].targetContract = address(smallVault);
+        items[0].onBehalfOfAccount = user1;
+        items[0].value = 0;
+        items[0].data =
+            abi.encodeWithSelector(MockERC4626Vault.simulateDeposit.selector, depositAssets, depositShares, user1);
+
+        // Execute batch call - should PASS with VIRTUAL_DEPOSIT formula
+        // Without VIRTUAL_DEPOSIT, this would fail with "Share price decreased without bad debt socialization"
+        vm.prank(user1);
+        evc.batch(items);
+
+        // Verify final state matches expected
+        assertEq(smallVault.totalAssets(), preAssets + depositAssets, "Post assets mismatch");
+        assertEq(smallVault.totalSupply(), preSupply + depositShares, "Post supply mismatch");
+
+        // Demonstrate the math difference
+        uint256 VIRTUAL_DEPOSIT = 1e6;
+
+        // Without VIRTUAL_DEPOSIT (incorrect formula that caused false positive)
+        uint256 preRateNoVD = (preAssets * 1e18) / preSupply;
+        uint256 postRateNoVD = ((preAssets + depositAssets) * 1e18) / (preSupply + depositShares);
+
+        // With VIRTUAL_DEPOSIT (correct Euler formula)
+        uint256 preRateWithVD = ((preAssets + VIRTUAL_DEPOSIT) * 1e18) / (preSupply + VIRTUAL_DEPOSIT);
+        uint256 postRateWithVD =
+            ((preAssets + depositAssets + VIRTUAL_DEPOSIT) * 1e18) / (preSupply + depositShares + VIRTUAL_DEPOSIT);
+
+        // Assert the key insight: without VD it decreases, with VD it increases
+        assertLt(postRateNoVD, preRateNoVD, "Without VD: rate should decrease (false positive scenario)");
+        assertGt(postRateWithVD, preRateWithVD, "With VD: rate should increase (correct behavior)");
+    }
 }
 
 /// @title MockERC4626Vault
@@ -495,10 +546,6 @@ contract MockERC4626Vault is ERC4626 {
 
     // Events for bad debt socialization simulation
     event Repay(address indexed account, uint256 assets);
-
-    // Event for interest fee mechanism simulation (per EVK whitepaper)
-    // This event indicates that interest fees are being charged, which causes depositor dilution
-    event InterestAccrued(address indexed account, uint256 assets);
 
     constructor(
         ERC20 assetToken
@@ -545,26 +592,16 @@ contract MockERC4626Vault is ERC4626 {
         emit Withdraw(address(0), address(0), address(0), amount, 0);
     }
 
-    /// @notice Simulates share price decrease due to EVK interest fee mechanism
-    /// @dev Per EVK whitepaper: "The interest fees are charged by creating the amount of shares
-    /// necessary to dilute depositors by the interestFee fraction of the interest"
-    /// The InterestAccrued event indicates this fee mechanism is operating
-    function decreaseSharePriceWithInterestAccrued(
-        uint256 amount
-    ) external {
-        require(_totalAssets >= amount, "Insufficient assets");
-        _totalAssets -= amount;
-        // Keep total supply the same to simulate dilution effect
-        // In reality, shares are minted to fee receiver which dilutes existing depositors
-
-        // Emit InterestAccrued event to simulate legitimate fee dilution
-        // This is the signal that interest fees are being charged (expected behavior)
-        address borrower = address(0xBEEF); // Mock borrower
-        emit InterestAccrued(borrower, amount);
-    }
-
     function noOp() external {
         // Do nothing
+    }
+
+    /// @notice Simulates a deposit with specific assets and shares
+    /// @dev Used to test the VIRTUAL_DEPOSIT formula by creating deposits at specific ratios
+    /// that would trigger false positives without the correct formula
+    function simulateDeposit(uint256 assets, uint256 shares, address receiver) external {
+        _totalAssets += assets;
+        _mint(receiver, shares);
     }
 
     // Required IVault interface functions
