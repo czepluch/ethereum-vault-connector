@@ -7,35 +7,32 @@ import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 
 /// @title VaultSharePriceAssertion
-/// @notice Monitors vault share prices and ensures they don't decrease unless legitimate reasons exist
+/// @notice Monitors Euler vault share prices and ensures they don't decrease unless bad debt socialization occurs
 /// @dev This assertion intercepts EVC calls to monitor all vault interactions and validates
-///      that vault share prices (totalAssets/totalSupply) don't decrease unless there's a
-///      legitimate reason such as bad debt socialization or interest fee accrual.
+///      that vault share prices don't decrease unless bad debt socialization has occurred.
+///
+///      IMPORTANT: This assertion uses Euler's exchange rate formula which includes VIRTUAL_DEPOSIT_AMOUNT (1e6)
+///      to prevent exchange rate manipulation attacks (first depositor attack). The formula is:
+///      exchangeRate = (totalAssets + VIRTUAL_DEPOSIT) / (totalSupply + VIRTUAL_DEPOSIT)
 ///
 /// @custom:invariant VAULT_SHARE_PRICE_INVARIANT
-/// For any vault V and any transaction T that interacts with V:
+/// For any Euler vault V and any transaction T that interacts with V:
 ///
 /// Let:
-/// - SP_pre(V) = totalAssets(V) * 1e18 / totalSupply(V) before transaction T
-/// - SP_post(V) = totalAssets(V) * 1e18 / totalSupply(V) after transaction T
-/// - LEGITIMATE(T,V) = true if legitimate share price decrease events occurred for vault V in transaction T
+/// - SP_pre(V) = (totalAssets(V) + 1e6) * 1e18 / (totalSupply(V) + 1e6) before transaction T
+/// - SP_post(V) = (totalAssets(V) + 1e6) * 1e18 / (totalSupply(V) + 1e6) after transaction T
+/// - BAD_DEBT(T,V) = true if bad debt socialization events occurred for vault V in transaction T
 ///
 /// Then the following invariant must hold:
 ///
-/// SP_post(V) >= SP_pre(V) ∨ LEGITIMATE(T,V)
+/// SP_post(V) >= SP_pre(V) ∨ BAD_DEBT(T,V)
 ///
 /// In plain English:
-/// "A vault's share price cannot decrease unless a legitimate reason exists"
+/// "An Euler vault's share price cannot decrease unless bad debt socialization has occurred"
 ///
-/// Legitimate share price decreases are detected by monitoring the following events from vault V:
-/// 1. DebtSocialized(account, assets) - bad debt socialization event
-/// 2. Repay(account, assets) where account ≠ address(0) AND Withdraw from address(0) - legacy bad debt detection
-/// 3. InterestAccrued(account, assets) - interest fee mechanism causing depositor dilution (per EVK whitepaper)
-///
-/// The InterestAccrued event indicates the EVK fee mechanism is operating. Per the EVK whitepaper:
-/// "The interest fees are charged by creating the amount of shares necessary to dilute depositors
-/// by the interestFee fraction of the interest" - this is expected behavior that causes tiny share
-/// price decreases.
+/// Bad debt socialization is detected by monitoring the following events from vault V:
+/// 1. DebtSocialized(account, assets) - explicit bad debt socialization event
+/// 2. Repay(account, assets) where account ≠ address(0) AND Withdraw from address(0) - legacy bad debt pattern
 ///
 /// This invariant protects depositors from:
 /// - Malicious vault implementations that steal funds
@@ -45,9 +42,13 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 /// While allowing legitimate scenarios:
 /// - Normal vault operations (deposits, withdrawals, yield)
 /// - Bad debt socialization (as designed in Euler protocol)
-/// - Interest fee accrual (as designed in Euler protocol)
 contract VaultSharePriceAssertion is Assertion {
+    /// @notice Virtual deposit amount used by Euler to prevent exchange rate manipulation
+    /// @dev Per EVK ConversionHelpers.sol: "virtual deposit used in conversions between shares and assets,
+    ///      serving as exchange rate manipulation mitigation"
+    uint256 internal constant VIRTUAL_DEPOSIT_AMOUNT = 1e6;
     /// @notice Register triggers for EVC operations
+
     function triggers() external view override {
         // Register triggers for each call type
         registerCallTrigger(this.assertionBatchSharePriceInvariant.selector, IEVC.batch.selector);
@@ -58,8 +59,8 @@ contract VaultSharePriceAssertion is Assertion {
     }
 
     /// @notice Validates share price invariant for batch operations
-    /// @dev Compares vault share prices before/after transaction. Reverts if share price decreases without bad debt
-    /// socialization
+    /// @dev Compares vault share prices before/after transaction. Reverts if share price decreases without
+    /// bad debt socialization
     function assertionBatchSharePriceInvariant() external {
         IEVC evc = IEVC(ph.getAssertionAdopter());
 
@@ -136,17 +137,21 @@ contract VaultSharePriceAssertion is Assertion {
 
         // Check if share price decreased
         if (postSharePrice < preSharePrice) {
-            // Share price decreased - check if this is legitimate
-            bool hasLegitimateReason = checkForLegitimateSharePriceDecrease(vault);
+            // Share price decreased - check if bad debt socialization occurred
+            bool hasBadDebtSocialization = checkForBadDebtSocialization(vault);
 
-            // Use simple error message to save gas
-            require(hasLegitimateReason, "VaultSharePriceAssertion: Share price decreased without legitimate reason");
+            require(
+                hasBadDebtSocialization,
+                "VaultSharePriceAssertion: Share price decreased without bad debt socialization"
+            );
         }
     }
 
-    /// @notice Gets the share price of a vault
+    /// @notice Gets the share price of an Euler vault using the EVK exchange rate formula
     /// @param vault The vault address
-    /// @return sharePrice The share price (totalAssets * 1e18 / totalSupply)
+    /// @return sharePrice The share price using Euler's formula: (totalAssets + VD) * 1e18 / (totalSupply + VD)
+    /// @dev Uses VIRTUAL_DEPOSIT_AMOUNT (1e6) as per EVK ConversionHelpers.sol to match Euler's internal
+    ///      exchange rate calculation and prevent false positives from exchange rate manipulation protection
     function getSharePrice(
         address vault
     ) internal view returns (uint256 sharePrice) {
@@ -167,31 +172,29 @@ contract VaultSharePriceAssertion is Assertion {
             return 0; // Not an ERC4626 vault, return 0 to skip
         }
 
-        // Calculate share price (totalAssets * 1e18 / totalSupply)
-        if (totalSupply > 0) {
-            sharePrice = (totalAssets * 1e18) / totalSupply;
-        }
+        // Calculate share price using Euler's formula with VIRTUAL_DEPOSIT_AMOUNT
+        // This matches EVK's ConversionHelpers.conversionTotals() which adds VIRTUAL_DEPOSIT_AMOUNT
+        // to both totalAssets and totalShares to prevent exchange rate manipulation
+        sharePrice = ((totalAssets + VIRTUAL_DEPOSIT_AMOUNT) * 1e18) / (totalSupply + VIRTUAL_DEPOSIT_AMOUNT);
     }
 
-    /// @notice Checks if there's a legitimate reason for share price decrease
+    /// @notice Checks if bad debt socialization occurred for a vault
     /// @param vault The vault address to check
-    /// @return hasLegitimateReason True if DebtSocialized, Repay+Withdraw pattern, or InterestAccrued detected
-    function checkForLegitimateSharePriceDecrease(
+    /// @return hasBadDebt True if DebtSocialized event or Repay+Withdraw bad debt pattern detected
+    function checkForBadDebtSocialization(
         address vault
-    ) internal returns (bool hasLegitimateReason) {
+    ) internal returns (bool hasBadDebt) {
         // Get all logs from the transaction
         PhEvm.Log[] memory logs = ph.getLogs();
 
         bool hasDebtSocializedEvent = false;
         bool hasRepayFromLiquidator = false;
         bool hasWithdrawFromZero = false;
-        bool hasInterestAccruedEvent = false;
 
         // Event signatures
         bytes32 debtSocializedEventSig = keccak256("DebtSocialized(address,uint256)");
         bytes32 repayEventSig = keccak256("Repay(address,uint256)");
         bytes32 withdrawEventSig = keccak256("Withdraw(address,address,address,uint256,uint256)");
-        bytes32 interestAccruedEventSig = keccak256("InterestAccrued(address,uint256)");
 
         // Check each log for legitimate share price decrease events
         for (uint256 i = 0; i < logs.length; i++) {
@@ -205,13 +208,6 @@ contract VaultSharePriceAssertion is Assertion {
                     // Check for DebtSocialized event
                     if (eventSig == debtSocializedEventSig) {
                         hasDebtSocializedEvent = true;
-                    }
-
-                    // Check for InterestAccrued event - indicates fee mechanism causing dilution
-                    // Per EVK whitepaper: "The interest fees are charged by creating the amount of
-                    // shares necessary to dilute depositors by the interestFee fraction of the interest"
-                    if (eventSig == interestAccruedEventSig) {
-                        hasInterestAccruedEvent = true;
                     }
 
                     // Check for Repay event
@@ -235,10 +231,9 @@ contract VaultSharePriceAssertion is Assertion {
             }
         }
 
-        // Legitimate share price decrease is detected if:
-        // 1. DebtSocialized event is present (bad debt socialization), OR
-        // 2. Both Repay from liquidator AND Withdraw from address(0) occur together (legacy bad debt detection), OR
-        // 3. InterestAccrued event is present (fee mechanism causing depositor dilution - expected behavior)
-        return hasDebtSocializedEvent || (hasRepayFromLiquidator && hasWithdrawFromZero) || hasInterestAccruedEvent;
+        // Bad debt socialization is detected if:
+        // 1. DebtSocialized event is present (explicit bad debt socialization), OR
+        // 2. Both Repay from liquidator AND Withdraw from address(0) occur together (legacy bad debt pattern)
+        return hasDebtSocializedEvent || (hasRepayFromLiquidator && hasWithdrawFromZero);
     }
 }

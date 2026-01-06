@@ -66,8 +66,7 @@ contract VaultAccountingIntegrityAssertionBacktest is CredibleTestWithBacktestin
                 endBlock: END_BLOCK,
                 blockRange: BLOCK_RANGE,
                 assertionCreationCode: type(VaultAccountingIntegrityAssertion).creationCode,
-                assertionSelector: VaultAccountingIntegrityAssertion.assertionControlCollateralAccountingIntegrity
-                    .selector,
+                assertionSelector: VaultAccountingIntegrityAssertion.assertionControlCollateralAccountingIntegrity.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
                 useTraceFilter: false,
