@@ -5,6 +5,7 @@ import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IPerspective} from "./interfaces/IPerspective.sol";
 
 /// @notice Interface for querying ERC20 token balances
 interface IERC20 {
@@ -51,6 +52,40 @@ interface IEVaultCash {
 /// - Repays (balance and cash both increase by same amount)
 /// - Donations to vault (balance > cash is acceptable - unaccounted assets can be claimed via skim())
 contract VaultAccountingIntegrityAssertion is Assertion {
+    /// @notice Array of perspectives to check for vault verification
+    /// @dev Includes GovernedPerspective and EscrowedCollateralPerspective
+    IPerspective[] public perspectives;
+
+    /// @notice Constructor to set the perspectives for vault verification
+    /// @param _perspectives Array of perspective contract addresses
+    constructor(
+        address[] memory _perspectives
+    ) {
+        for (uint256 i = 0; i < _perspectives.length; i++) {
+            perspectives.push(IPerspective(_perspectives[i]));
+        }
+    }
+
+    /// @notice Checks if vault is verified in any of the perspectives
+    /// @param vault The vault address to check
+    /// @return True if the vault is verified in at least one perspective, or if no perspectives configured
+    function isVerifiedVault(
+        address vault
+    ) internal view returns (bool) {
+        // If no perspectives configured, verify all vaults (for testing compatibility)
+        if (perspectives.length == 0) return true;
+
+        for (uint256 i = 0; i < perspectives.length; i++) {
+            try perspectives[i].isVerified(vault) returns (bool verified) {
+                if (verified) return true;
+            } catch {
+                // Perspective call failed, skip this perspective
+                continue;
+            }
+        }
+        return false;
+    }
+
     /// @notice Specifies which EVC functions this assertion should intercept
     /// @dev Registers triggers for batch, call, and controlCollateral operations
     function triggers() external view override {
@@ -85,8 +120,8 @@ contract VaultAccountingIntegrityAssertion is Assertion {
             for (uint256 j = 0; j < items.length; j++) {
                 address vault = items[j].targetContract;
 
-                // Skip non-contracts
-                if (vault.code.length == 0) continue;
+                // Skip non-verified vaults (filters out WETH, Permit2, routers, EOAs, etc.)
+                if (!isVerifiedVault(vault)) continue;
 
                 allVaults[vaultIndex] = vault;
                 vaultIndex++;
@@ -121,7 +156,9 @@ contract VaultAccountingIntegrityAssertion is Assertion {
         for (uint256 i = 0; i < callInputs.length; i++) {
             (address targetContract,,,,) = abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
 
-            if (targetContract.code.length == 0) continue;
+            // Skip non-verified vaults
+            if (!isVerifiedVault(targetContract)) continue;
+
             validateVaultAccountingIntegrity(targetContract);
         }
     }
@@ -137,7 +174,9 @@ contract VaultAccountingIntegrityAssertion is Assertion {
             // data)
             (address targetCollateral,,,) = abi.decode(controlInputs[i].input, (address, address, uint256, bytes));
 
-            if (targetCollateral.code.length == 0) continue;
+            // Skip non-verified vaults
+            if (!isVerifiedVault(targetCollateral)) continue;
+
             validateVaultAccountingIntegrity(targetCollateral);
         }
     }
@@ -150,19 +189,11 @@ contract VaultAccountingIntegrityAssertion is Assertion {
         // Fork to post-transaction state and check: balance >= cash
         ph.forkPostTx();
 
-        // Try to get asset and cash - if either fails, skip gracefully (not an EVault)
-        try IERC4626(vault).asset() returns (address asset) {
-            try IEVaultCash(vault).cash() returns (uint256 cash) {
-                uint256 balance = IERC20(asset).balanceOf(vault);
+        // Get asset and cash - vault is verified so these should succeed
+        address asset = IERC4626(vault).asset();
+        uint256 cash = IEVaultCash(vault).cash();
+        uint256 balance = IERC20(asset).balanceOf(vault);
 
-                require(balance >= cash, "VaultAccountingIntegrityAssertion: Balance < cash");
-            } catch {
-                // No cash() function, skip this vault (not an EVault)
-                return;
-            }
-        } catch {
-            // No asset() function, skip this vault (not an ERC4626 vault)
-            return;
-        }
+        require(balance >= cash, "VaultAccountingIntegrityAssertion: Balance < cash");
     }
 }

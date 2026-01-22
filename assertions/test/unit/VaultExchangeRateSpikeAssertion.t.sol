@@ -10,6 +10,7 @@ import {IERC4626} from "openzeppelin-contracts/interfaces/IERC4626.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
 import {RateManipulatorVault} from "../mocks/MaliciousVaults.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title TestVaultExchangeRateSpikeAssertion
 /// @notice Test suite for VaultExchangeRateSpikeAssertion
@@ -19,9 +20,21 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
     MockEVault public vault2;
     RateManipulatorVault public maliciousVault;
     MockERC20 public asset;
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(VaultExchangeRateSpikeAssertion).creationCode, abi.encode(perspectives));
+    }
 
     function setUp() public override {
         super.setUp();
+
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy mock asset
         asset = new MockERC20("Mock Asset", "MOCK");
@@ -32,6 +45,11 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
 
         // Deploy malicious vault
         maliciousVault = new RateManipulatorVault(asset, evc);
+
+        // Register vaults with the perspective
+        mockPerspective.addVerifiedVault(address(vault1));
+        mockPerspective.addVerifiedVault(address(vault2));
+        mockPerspective.addVerifiedVault(address(maliciousVault));
 
         // Setup tokens (mint + approve)
         setupToken(asset, address(vault1), 10000e18);
@@ -52,7 +70,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -80,7 +98,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -108,7 +126,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -146,7 +164,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion IMMEDIATELY before batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -177,7 +195,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion IMMEDIATELY before batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -200,7 +218,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -233,7 +251,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionCallExchangeRateSpike.selector
         });
 
@@ -260,7 +278,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionControlCollateralExchangeRateSpike.selector
         });
 
@@ -287,7 +305,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -314,7 +332,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -357,7 +375,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion IMMEDIATELY before batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -387,7 +405,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion IMMEDIATELY before batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -417,7 +435,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion IMMEDIATELY before batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -437,7 +455,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -464,7 +482,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector
         });
 
@@ -518,7 +536,7 @@ contract TestVaultExchangeRateSpikeAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultExchangeRateSpikeAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultExchangeRateSpikeAssertion.assertionCallExchangeRateSpike.selector
         });
 

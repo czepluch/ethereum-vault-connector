@@ -10,6 +10,7 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
 import {EventManipulatorVault, MockNonVaultContract, WrapperVault} from "../mocks/MaliciousVaults.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title TestVaultAssetTransferAccountingAssertion
 /// @notice Comprehensive test suite for the VaultAssetTransferAccountingAssertion assertion
@@ -25,11 +26,29 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     MockERC20 public token1;
     MockERC20 public token2;
 
+    // Mock perspective for vault verification
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(VaultAssetTransferAccountingAssertion).creationCode, abi.encode(perspectives));
+    }
+
+    /// @notice Helper to register a vault with the mock perspective
+    function registerVaultWithPerspective(
+        address vault
+    ) internal {
+        mockPerspective.addVerifiedVault(vault);
+    }
+
     function setUp() public override {
         super.setUp();
 
-        // Deploy assertion
-        assertion = new VaultAssetTransferAccountingAssertion();
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
@@ -38,6 +57,15 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Deploy test vaults (real protocol behavior)
         vault1 = new MockEVault(token1, evc);
         vault2 = new MockEVault(token2, evc);
+
+        // Register vaults with the perspective
+        mockPerspective.addVerifiedVault(address(vault1));
+        mockPerspective.addVerifiedVault(address(vault2));
+
+        // Deploy assertion with perspective
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        assertion = new VaultAssetTransferAccountingAssertion(perspectives);
 
         // Setup test environment
         setupUserETH();
@@ -76,7 +104,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -112,7 +140,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -153,7 +181,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -197,7 +225,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -228,7 +256,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -264,7 +292,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -307,7 +335,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -335,7 +363,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for call operations
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector
         });
 
@@ -372,7 +400,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for controlCollateral operations
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionControlCollateralAssetTransferAccounting.selector
         });
 
@@ -407,6 +435,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     function testAssetTransferAccounting_Batch_MissingWithdrawEvent_Fails() public {
         // Deploy malicious vault
         EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
+        registerVaultWithPerspective(address(maliciousVault));
 
         // Approve malicious vault
         vm.prank(user1);
@@ -429,7 +458,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -453,6 +482,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     function testAssetTransferAccounting_Batch_MissingBorrowEvent_Fails() public {
         // Deploy malicious vault with liquidity
         EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
+        registerVaultWithPerspective(address(maliciousVault));
 
         // Approve malicious vault
         vm.prank(user2);
@@ -475,7 +505,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -499,6 +529,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     function testAssetTransferAccounting_Batch_UnderreportedEvent_Fails() public {
         // Deploy malicious vault
         EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
+        registerVaultWithPerspective(address(maliciousVault));
 
         // Approve malicious vault
         vm.prank(user1);
@@ -521,7 +552,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -544,6 +575,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     function testAssetTransferAccounting_Batch_ExtraTransfer_Fails() public {
         // Deploy malicious vault
         EventManipulatorVault maliciousVault = new EventManipulatorVault(token1, evc);
+        registerVaultWithPerspective(address(maliciousVault));
 
         // Approve malicious vault
         vm.prank(user1);
@@ -566,7 +598,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -599,7 +631,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -627,7 +659,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -658,7 +690,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -684,6 +716,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
     function testAssetTransferAccounting_Batch_NestedVaultDeposit_Passes() public {
         // Deploy a wrapper vault that deposits into underlying vault
         WrapperVault wrapperVault = new WrapperVault(token1, evc, vault1);
+        registerVaultWithPerspective(address(wrapperVault));
 
         // Approve wrapper vault
         vm.prank(user1);
@@ -699,7 +732,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -754,7 +787,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -799,7 +832,7 @@ contract TestVaultAssetTransferAccountingAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector
         });
 

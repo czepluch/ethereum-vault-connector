@@ -10,6 +10,7 @@ import {IERC4626} from "openzeppelin-contracts/interfaces/IERC4626.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
 import {CashThiefVault} from "../mocks/MaliciousVaults.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title TestVaultAccountingIntegrityAssertion
 /// @notice Test suite for VaultAccountingIntegrityAssertion
@@ -19,9 +20,21 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
     MockEVault public vault2;
     CashThiefVault public maliciousVault;
     MockERC20 public asset;
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(VaultAccountingIntegrityAssertion).creationCode, abi.encode(perspectives));
+    }
 
     function setUp() public override {
         super.setUp();
+
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy mock asset
         asset = new MockERC20("Mock Asset", "MOCK");
@@ -32,6 +45,11 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
 
         // Deploy malicious vault
         maliciousVault = new CashThiefVault(asset, evc);
+
+        // Register vaults with the perspective
+        mockPerspective.addVerifiedVault(address(vault1));
+        mockPerspective.addVerifiedVault(address(vault2));
+        mockPerspective.addVerifiedVault(address(maliciousVault));
 
         // Setup tokens (mint + approve)
         setupToken(asset, address(vault1), 1000e18);
@@ -59,7 +77,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -87,7 +105,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -115,7 +133,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -145,7 +163,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -183,7 +201,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -213,7 +231,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -234,7 +252,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionCallAccountingIntegrity.selector
         });
 
@@ -261,7 +279,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion for controlCollateral operations
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionControlCollateralAccountingIntegrity.selector
         });
 
@@ -287,7 +305,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -322,7 +340,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -354,7 +372,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -386,7 +404,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -418,7 +436,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -446,7 +464,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionBatchAccountingIntegrity.selector
         });
 
@@ -488,7 +506,7 @@ contract TestVaultAccountingIntegrityAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAccountingIntegrityAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAccountingIntegrityAssertion.assertionCallAccountingIntegrity.selector
         });
 

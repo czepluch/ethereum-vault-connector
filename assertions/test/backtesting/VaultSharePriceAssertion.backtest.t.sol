@@ -15,6 +15,14 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
     // EVC Linea deployment
     address constant EVC_LINEA = 0xd8CeCEe9A04eA3d941a959F68fb4486f23271d09;
 
+    // Mainnet Perspective addresses
+    address constant MAINNET_GOVERNED_PERSPECTIVE = 0xcD7E3a18b23d60c3eD2cae736fe9c0Ad116a54a4;
+    address constant MAINNET_ESCROWED_COLLATERAL_PERSPECTIVE = 0xc79C866dd9f2EF9E5Ee0C68bCEB84beC9D451044;
+
+    // Linea Perspective addresses
+    address constant LINEA_GOVERNED_PERSPECTIVE = 0x74f9fD22aA0Dd5Bbf6006a4c9818248eb476C50A;
+    address constant LINEA_ESCROWED_COLLATERAL_PERSPECTIVE = 0xc8d904FE94b65612AED5A73203C0eF8f3A0308C0;
+
     // Block configuration for mainnet - adjust these to test different ranges
     uint256 constant MAINNET_END_BLOCK = 21551000;
     uint256 constant MAINNET_BLOCK_RANGE = 3;
@@ -23,6 +31,22 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
     uint256 constant LINEA_END_BLOCK = 27419134;
     uint256 constant LINEA_BLOCK_RANGE = 1;
 
+    /// @notice Helper to get assertion creation code with mainnet perspectives
+    function getMainnetAssertionCreationCode() internal pure returns (bytes memory) {
+        address[] memory perspectives = new address[](2);
+        perspectives[0] = MAINNET_GOVERNED_PERSPECTIVE;
+        perspectives[1] = MAINNET_ESCROWED_COLLATERAL_PERSPECTIVE;
+        return abi.encodePacked(type(VaultSharePriceAssertion).creationCode, abi.encode(perspectives));
+    }
+
+    /// @notice Helper to get assertion creation code with Linea perspectives
+    function getLineaAssertionCreationCode() internal pure returns (bytes memory) {
+        address[] memory perspectives = new address[](2);
+        perspectives[0] = LINEA_GOVERNED_PERSPECTIVE;
+        perspectives[1] = LINEA_ESCROWED_COLLATERAL_PERSPECTIVE;
+        return abi.encodePacked(type(VaultSharePriceAssertion).creationCode, abi.encode(perspectives));
+    }
+
     /// @notice Backtest batch operations against mainnet EVC
     function testBacktest_VaultSharePrice_BatchOperations() public {
         BacktestingTypes.BacktestingResults memory results = executeBacktest(
@@ -30,7 +54,7 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
                 targetContract: EVC_MAINNET,
                 endBlock: MAINNET_END_BLOCK,
                 blockRange: MAINNET_BLOCK_RANGE,
-                assertionCreationCode: type(VaultSharePriceAssertion).creationCode,
+                assertionCreationCode: getMainnetAssertionCreationCode(),
                 assertionSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
@@ -50,7 +74,7 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
                 targetContract: EVC_MAINNET,
                 endBlock: MAINNET_END_BLOCK,
                 blockRange: MAINNET_BLOCK_RANGE,
-                assertionCreationCode: type(VaultSharePriceAssertion).creationCode,
+                assertionCreationCode: getMainnetAssertionCreationCode(),
                 assertionSelector: VaultSharePriceAssertion.assertionCallSharePriceInvariant.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
@@ -69,7 +93,7 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
                 targetContract: EVC_MAINNET,
                 endBlock: MAINNET_END_BLOCK,
                 blockRange: MAINNET_BLOCK_RANGE,
-                assertionCreationCode: type(VaultSharePriceAssertion).creationCode,
+                assertionCreationCode: getMainnetAssertionCreationCode(),
                 assertionSelector: VaultSharePriceAssertion.assertionControlCollateralSharePriceInvariant.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
@@ -99,7 +123,7 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
                 targetContract: EVC_LINEA,
                 endBlock: 27419134, // Block containing tx 0x4ec425f3...
                 blockRange: 1,
-                assertionCreationCode: type(VaultSharePriceAssertion).creationCode,
+                assertionCreationCode: getLineaAssertionCreationCode(),
                 assertionSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector,
                 rpcUrl: rpcUrl,
                 detailedBlocks: false,
@@ -126,7 +150,7 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
                 targetContract: EVC_LINEA,
                 endBlock: LINEA_END_BLOCK,
                 blockRange: LINEA_BLOCK_RANGE,
-                assertionCreationCode: type(VaultSharePriceAssertion).creationCode,
+                assertionCreationCode: getLineaAssertionCreationCode(),
                 assertionSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector,
                 rpcUrl: rpcUrl,
                 detailedBlocks: false,
@@ -153,7 +177,7 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
                 targetContract: EVC_LINEA,
                 endBlock: LINEA_END_BLOCK,
                 blockRange: LINEA_BLOCK_RANGE,
-                assertionCreationCode: type(VaultSharePriceAssertion).creationCode,
+                assertionCreationCode: getLineaAssertionCreationCode(),
                 assertionSelector: VaultSharePriceAssertion.assertionCallSharePriceInvariant.selector,
                 rpcUrl: rpcUrl,
                 detailedBlocks: false,
@@ -163,5 +187,34 @@ contract VaultSharePriceAssertionBacktest is CredibleTestWithBacktesting {
         );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
+    }
+
+    /// @notice Debug test for Linea tx 0xf2f84d5a619a1645f5530ae61613be751f277b6571e81e75c4a751c6cb1753ac
+    /// @dev This specific transaction ran out of gas (3M) on staging
+    function testBacktest_VaultSharePrice_Linea_DebugGasIssue() public {
+        // Use LINEA_RPC_URL if available, fallback to MAINNET_RPC_URL for local testing
+        string memory rpcUrl;
+        try vm.envString("LINEA_RPC_URL") returns (string memory url) {
+            rpcUrl = url;
+        } catch {
+            rpcUrl = vm.envString("MAINNET_RPC_URL");
+        }
+
+        // Block 28147579 contains the failing tx
+        BacktestingTypes.BacktestingResults memory results = executeBacktest(
+            BacktestingTypes.BacktestingConfig({
+                targetContract: EVC_LINEA,
+                endBlock: 28147579,
+                blockRange: 1,
+                assertionCreationCode: getLineaAssertionCreationCode(),
+                assertionSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector,
+                rpcUrl: rpcUrl,
+                detailedBlocks: true,
+                useTraceFilter: false,
+                forkByTxHash: true
+            })
+        );
+
+        assertEq(results.assertionFailures, 0, "Debug test should pass");
     }
 }
