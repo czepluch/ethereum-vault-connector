@@ -7,6 +7,7 @@ import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title VaultAssetTransferAccountingAssertion Fuzz Tests
 /// @notice Fuzz testing for critical VaultAssetTransferAccountingAssertion scenarios
@@ -25,17 +26,36 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
     // Test token
     MockERC20 public token;
 
+    // Mock perspective for vault verification
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(VaultAssetTransferAccountingAssertion).creationCode, abi.encode(perspectives));
+    }
+
     function setUp() public override {
         super.setUp();
 
-        // Deploy assertion
-        assertion = new VaultAssetTransferAccountingAssertion();
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy test token
         token = new MockERC20("Test Token", "TT");
 
         // Deploy test vault
         vault = new MockEVault(token, evc);
+
+        // Register vault with perspective
+        mockPerspective.addVerifiedVault(address(vault));
+
+        // Deploy assertion with perspective
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        assertion = new VaultAssetTransferAccountingAssertion(perspectives);
 
         // Setup test environment
         setupUserETH();
@@ -71,7 +91,7 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector
         });
 
@@ -106,7 +126,10 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
     ///
     /// @param depositAmount Initial deposit amount (bounded)
     /// @param withdrawAmount Amount to withdraw (bounded)
-    function testFuzz_WithdrawBalancesMatch(uint256 depositAmount, uint256 withdrawAmount) public {
+    function testFuzz_WithdrawBalancesMatch(
+        uint256 depositAmount,
+        uint256 withdrawAmount
+    ) public {
         // Bound deposit to realistic range: 100e18 to 1000000e18
         depositAmount = bound(depositAmount, 100e18, 1000000e18);
 
@@ -125,7 +148,7 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector
         });
 
@@ -166,7 +189,10 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
     ///
     /// @param numOps Number of withdrawal operations in batch (bounded to 2-5)
     /// @param seed Random seed for generating amounts
-    function testFuzz_BatchMultipleTransfers(uint256 numOps, uint256 seed) public {
+    function testFuzz_BatchMultipleTransfers(
+        uint256 numOps,
+        uint256 seed
+    ) public {
         // Bound number of operations to 2-5 (avoid gas limit issues)
         numOps = bound(numOps, 2, 5);
 
@@ -218,7 +244,7 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 
@@ -277,7 +303,7 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionCallAssetTransferAccounting.selector
         });
 
@@ -309,7 +335,10 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
     ///
     /// @param withdrawAmount Amount to withdraw (bounded)
     /// @param borrowAmount Amount to borrow (bounded)
-    function testFuzz_MixedOperationsAccounting(uint256 withdrawAmount, uint256 borrowAmount) public {
+    function testFuzz_MixedOperationsAccounting(
+        uint256 withdrawAmount,
+        uint256 borrowAmount
+    ) public {
         // Bound amounts to realistic ranges
         withdrawAmount = bound(withdrawAmount, 10e18, 100e18);
         borrowAmount = bound(borrowAmount, 10e18, 100e18);
@@ -331,7 +360,7 @@ contract VaultAssetTransferAccountingAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultAssetTransferAccountingAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultAssetTransferAccountingAssertion.assertionBatchAssetTransferAccounting.selector
         });
 

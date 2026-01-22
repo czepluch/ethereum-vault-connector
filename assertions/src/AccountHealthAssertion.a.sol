@@ -5,6 +5,7 @@ import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
+import {IPerspective} from "./interfaces/IPerspective.sol";
 
 /// @title AccountHealthAssertion
 /// @notice Monitors account health and ensures healthy accounts cannot become unhealthy through vault operations
@@ -60,6 +61,40 @@ import {IVault} from "../../src/interfaces/IVault.sol";
 ///
 /// TODO: Follow up on whether we should skip accounts with no position (zero collateral and liability)
 contract AccountHealthAssertion is Assertion {
+    /// @notice Array of perspectives to check for vault verification
+    /// @dev Includes GovernedPerspective and EscrowedCollateralPerspective
+    IPerspective[] public perspectives;
+
+    /// @notice Constructor to set the perspectives for vault verification
+    /// @param _perspectives Array of perspective contract addresses
+    constructor(
+        address[] memory _perspectives
+    ) {
+        for (uint256 i = 0; i < _perspectives.length; i++) {
+            perspectives.push(IPerspective(_perspectives[i]));
+        }
+    }
+
+    /// @notice Checks if vault is verified in any of the perspectives
+    /// @param vault The vault address to check
+    /// @return True if the vault is verified in at least one perspective, or if no perspectives configured
+    function isVerifiedVault(
+        address vault
+    ) internal view returns (bool) {
+        // If no perspectives configured, verify all vaults (for testing compatibility)
+        if (perspectives.length == 0) return true;
+
+        for (uint256 i = 0; i < perspectives.length; i++) {
+            try perspectives[i].isVerified(vault) returns (bool verified) {
+                if (verified) return true;
+            } catch {
+                // Perspective call failed, skip this perspective
+                continue;
+            }
+        }
+        return false;
+    }
+
     /// @notice Register triggers for EVC operations
     function triggers() external view override {
         // Register triggers for each call type
@@ -167,6 +202,14 @@ contract AccountHealthAssertion is Assertion {
 
                 // Skip non-contract addresses
                 if (targetContract.code.length == 0) {
+                    unchecked {
+                        ++j;
+                    }
+                    continue;
+                }
+
+                // Skip non-verified vaults (filters out WETH, Permit2, routers, etc.)
+                if (!isVerifiedVault(targetContract)) {
                     unchecked {
                         ++j;
                     }
@@ -327,6 +370,14 @@ contract AccountHealthAssertion is Assertion {
                 continue;
             }
 
+            // Skip non-verified vaults (filters out WETH, Permit2, routers, etc.)
+            if (!isVerifiedVault(targetContract)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
             // Extract accounts affected by this operation (does selector check internally)
             address[] memory extractedAccounts = extractAccountsFromCalldata(data);
 
@@ -465,6 +516,14 @@ contract AccountHealthAssertion is Assertion {
 
             // Skip non-contract addresses
             if (targetCollateral.code.length == 0) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
+
+            // Skip non-verified vaults (filters out WETH, Permit2, routers, etc.)
+            if (!isVerifiedVault(targetCollateral)) {
                 unchecked {
                     ++i;
                 }

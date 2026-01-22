@@ -6,6 +6,7 @@ import {VaultSharePriceAssertion} from "../../src/VaultSharePriceAssertion.a.sol
 import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockSharePriceVault} from "../mocks/MockSharePriceVault.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title VaultSharePriceAssertion Fuzz Tests
 /// @notice Fuzz testing for critical VaultSharePriceAssertion scenarios
@@ -24,17 +25,36 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
     // Test token
     MockERC20 public token;
 
+    // Mock perspective for vault verification
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(VaultSharePriceAssertion).creationCode, abi.encode(perspectives));
+    }
+
     function setUp() public override {
         super.setUp();
 
-        // Deploy assertion
-        assertion = new VaultSharePriceAssertion();
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy test token
         token = new MockERC20("Test Token", "TT");
 
         // Deploy test vault
         vault = new MockSharePriceVault(token);
+
+        // Register vault with perspective
+        mockPerspective.addVerifiedVault(address(vault));
+
+        // Deploy assertion with perspective
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        assertion = new VaultSharePriceAssertion(perspectives);
 
         // Setup test environment
         setupUserETH();
@@ -59,7 +79,10 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
     ///
     /// @param initialRate Initial share price (bounded to realistic range)
     /// @param rateDecreasePercent Rate decrease in basis points (10000 = 100%)
-    function testFuzz_Spike_ExceedsThreshold_Reverts(uint256 initialRate, uint256 rateDecreasePercent) public {
+    function testFuzz_Spike_ExceedsThreshold_Reverts(
+        uint256 initialRate,
+        uint256 rateDecreasePercent
+    ) public {
         // Bound initial rate to realistic range: 0.1e18 to 10e18 (0.1 to 10 assets per share)
         initialRate = bound(initialRate, 0.1e18, 10e18);
 
@@ -91,7 +114,7 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -121,7 +144,10 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
     ///
     /// @param initialAssets Initial vault assets (bounded)
     /// @param lossAmount Amount of bad debt loss (bounded)
-    function testFuzz_DebtSocialization_AllowsDecrease(uint256 initialAssets, uint256 lossAmount) public {
+    function testFuzz_DebtSocialization_AllowsDecrease(
+        uint256 initialAssets,
+        uint256 lossAmount
+    ) public {
         // Bound initial assets to realistic range: 1000e18 to 1000000e18
         initialAssets = bound(initialAssets, 1000e18, 1000000e18);
 
@@ -151,7 +177,7 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -187,7 +213,10 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
     ///
     /// @param initialAssets Initial vault assets (bounded)
     /// @param excessAssets Excess assets from skim (bounded)
-    function testFuzz_Skim_WithinLimits_Passes(uint256 initialAssets, uint256 excessAssets) public {
+    function testFuzz_Skim_WithinLimits_Passes(
+        uint256 initialAssets,
+        uint256 excessAssets
+    ) public {
         // Bound initial assets to realistic range: 100e18 to 1000000e18
         initialAssets = bound(initialAssets, 100e18, 1000000e18);
 
@@ -209,7 +238,7 @@ contract VaultSharePriceAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 

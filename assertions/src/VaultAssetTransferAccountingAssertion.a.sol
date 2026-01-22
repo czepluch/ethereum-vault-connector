@@ -6,6 +6,7 @@ import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IVault} from "../../src/interfaces/IVault.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IPerspective} from "./interfaces/IPerspective.sol";
 
 /// @title VaultAssetTransferAccountingAssertion
 /// @notice Ensures all asset transfers from vaults are properly accounted for by Withdraw, Borrow, or Deposit events
@@ -57,6 +58,40 @@ import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626
 /// Note: This assertion only monitors transfers OUT of vaults (where from == vault).
 /// Transfers INTO vaults (deposits, repayments) are not monitored by this assertion.
 contract VaultAssetTransferAccountingAssertion is Assertion {
+    /// @notice Array of perspectives to check for vault verification
+    /// @dev Includes GovernedPerspective and EscrowedCollateralPerspective
+    IPerspective[] public perspectives;
+
+    /// @notice Constructor to set the perspectives for vault verification
+    /// @param _perspectives Array of perspective contract addresses
+    constructor(
+        address[] memory _perspectives
+    ) {
+        for (uint256 i = 0; i < _perspectives.length; i++) {
+            perspectives.push(IPerspective(_perspectives[i]));
+        }
+    }
+
+    /// @notice Checks if vault is verified in any of the perspectives
+    /// @param vault The vault address to check
+    /// @return True if the vault is verified in at least one perspective, or if no perspectives configured
+    function isVerifiedVault(
+        address vault
+    ) internal view returns (bool) {
+        // If no perspectives configured, verify all vaults (for testing compatibility)
+        if (perspectives.length == 0) return true;
+
+        for (uint256 i = 0; i < perspectives.length; i++) {
+            try perspectives[i].isVerified(vault) returns (bool verified) {
+                if (verified) return true;
+            } catch {
+                // Perspective call failed, skip this perspective
+                continue;
+            }
+        }
+        return false;
+    }
+
     /// @notice Specifies which EVC functions this assertion should intercept
     /// @dev Registers triggers for batch, call, and controlCollateral operations
     function triggers() external view override {
@@ -91,8 +126,8 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
             for (uint256 j = 0; j < items.length; j++) {
                 address vault = items[j].targetContract;
 
-                // Skip non-contracts
-                if (vault.code.length == 0) continue;
+                // Skip non-verified vaults (filters out WETH, Permit2, routers, EOAs, etc.)
+                if (!isVerifiedVault(vault)) continue;
 
                 allVaults[vaultIndex] = vault;
                 vaultIndex++;
@@ -127,7 +162,9 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
         for (uint256 i = 0; i < callInputs.length; i++) {
             (address targetContract,,,,) = abi.decode(callInputs[i].input, (address, address, uint256, bytes, uint256));
 
-            if (targetContract.code.length == 0) continue;
+            // Skip non-verified vaults
+            if (!isVerifiedVault(targetContract)) continue;
+
             validateVaultAssetTransferAccounting(targetContract);
         }
     }
@@ -143,7 +180,9 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
             // data)
             (address targetCollateral,,,) = abi.decode(controlInputs[i].input, (address, address, uint256, bytes));
 
-            if (targetCollateral.code.length == 0) continue;
+            // Skip non-verified vaults
+            if (!isVerifiedVault(targetCollateral)) continue;
+
             validateVaultAssetTransferAccounting(targetCollateral);
         }
     }
@@ -154,8 +193,7 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
         address vault
     ) internal {
         // Get the asset token address for this vault
-        address asset = getAssetAddress(vault);
-        if (asset == address(0)) return; // Not an ERC4626 vault or asset() call failed
+        address asset = IERC4626(vault).asset();
 
         // Get all logs from the transaction
         PhEvm.Log[] memory logs = ph.getLogs();
@@ -233,20 +271,5 @@ contract VaultAssetTransferAccountingAssertion is Assertion {
             totalTransferred <= totalAccounted,
             "VaultAssetTransferAccountingAssertion: Unaccounted asset transfers detected"
         );
-    }
-
-    /// @notice Gets the asset token address for a vault
-    /// @param vault The vault address to query
-    /// @return The asset token address, or address(0) if the call fails
-    /// @dev Uses try/catch to safely handle non-ERC4626 contracts in batch items
-    ///      (e.g., Permit2, routers, or other helper contracts)
-    function getAssetAddress(
-        address vault
-    ) internal view returns (address) {
-        try IERC4626(vault).asset() returns (address asset) {
-            return asset;
-        } catch {
-            return address(0);
-        }
     }
 }

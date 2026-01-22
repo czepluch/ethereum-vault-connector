@@ -9,6 +9,7 @@ import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockVault} from "../mocks/MockVault.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title TestAccountHealthAssertion
 /// @notice Test suite for AccountHealthAssertion
@@ -29,11 +30,29 @@ contract TestAccountHealthAssertion is BaseTest {
     MockERC20 public token4;
     MockERC20 public asset; // Asset for MockEVault tests
 
+    // Mock perspective for vault verification
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(AccountHealthAssertion).creationCode, abi.encode(perspectives));
+    }
+
+    /// @notice Helper to register a vault with the mock perspective
+    function registerVaultWithPerspective(
+        address vault
+    ) internal {
+        mockPerspective.addVerifiedVault(vault);
+    }
+
     function setUp() public override {
         super.setUp();
 
-        // Deploy assertion
-        assertion = new AccountHealthAssertion();
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
@@ -47,6 +66,17 @@ contract TestAccountHealthAssertion is BaseTest {
         vault2 = new MockVault(address(evc), address(token2));
         vault3 = new MockVault(address(evc), address(token3));
         vault4 = new MockVault(address(evc), address(token4));
+
+        // Register vaults with the perspective
+        mockPerspective.addVerifiedVault(address(vault1));
+        mockPerspective.addVerifiedVault(address(vault2));
+        mockPerspective.addVerifiedVault(address(vault3));
+        mockPerspective.addVerifiedVault(address(vault4));
+
+        // Deploy assertion with perspective
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        assertion = new AccountHealthAssertion(perspectives);
 
         // Setup test environment
         setupUserETH();
@@ -86,7 +116,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -133,7 +163,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -175,7 +205,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -207,7 +237,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -227,7 +257,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -252,7 +282,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for controlCollateral call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionControlCollateralAccountHealth.selector
         });
 
@@ -297,7 +327,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register call assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -341,7 +371,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register call assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -380,7 +410,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register call assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -412,7 +442,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for controlCollateral call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionControlCollateralAccountHealth.selector
         });
 
@@ -434,7 +464,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -461,7 +491,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -514,7 +544,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -551,7 +581,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -599,7 +629,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -646,7 +676,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -699,7 +729,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -748,7 +778,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -776,7 +806,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -814,7 +844,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -835,7 +865,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_UnhealthyViolator_Passes() public {
         // Deploy MockEVault instances for this test
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens to user1
         asset.mint(user1, 1000e18);
@@ -875,7 +907,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -895,7 +927,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_HealthyViolator_Reverts() public {
         // Deploy MockEVault instances for this test
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens to user1
         asset.mint(user1, 1000e18);
@@ -938,7 +972,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -959,7 +993,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_LiquidatorHealth_Passes() public {
         // Deploy MockEVault instances for this test
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens to users
         asset.mint(user1, 1000e18);
@@ -1011,7 +1047,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1035,7 +1071,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_MultipleSequentialLiquidations_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens to users
         asset.mint(user1, 1000e18);
@@ -1098,7 +1136,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // First liquidation - register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1114,7 +1152,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Second liquidation - register assertion again
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1133,7 +1171,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_ZeroCollateralRecovery_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens
         asset.mint(user1, 100e18);
@@ -1185,7 +1225,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1206,7 +1246,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_MultipleCollateralTypes_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens
         asset.mint(user1, 1000e18);
@@ -1253,7 +1295,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1272,7 +1314,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_Liquidate_SelfLiquidation_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens to user1
         asset.mint(user1, 2000e18);
@@ -1315,7 +1359,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1338,7 +1382,9 @@ contract TestAccountHealthAssertion is BaseTest {
     function testAccountHealth_ExactlyZeroHealth_Passes() public {
         // Deploy MockEVault instances
         MockEVault debtVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(debtVault));
         MockEVault collateralVault = new MockEVault(asset, evc);
+        registerVaultWithPerspective(address(collateralVault));
 
         // Mint tokens
         asset.mint(user1, 1000e18);
@@ -1378,7 +1424,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -1447,7 +1493,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1484,7 +1530,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1556,7 +1602,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1617,7 +1663,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion before the batch
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1725,7 +1771,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1779,7 +1825,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1850,7 +1896,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1921,7 +1967,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -1979,7 +2025,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2048,7 +2094,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2109,7 +2155,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2179,7 +2225,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2243,7 +2289,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2317,7 +2363,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2384,7 +2430,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register batch assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2458,7 +2504,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register batch assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2523,7 +2569,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register batch assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2584,7 +2630,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register batch assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2638,7 +2684,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register call assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
 
@@ -2685,7 +2731,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Test 1: Single call with assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
         vm.prank(user1);
@@ -2695,7 +2741,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Test 2: Three consecutive calls, each with assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
         vm.prank(user1);
@@ -2703,7 +2749,7 @@ contract TestAccountHealthAssertion is BaseTest {
 
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
         vm.prank(user1);
@@ -2711,7 +2757,7 @@ contract TestAccountHealthAssertion is BaseTest {
 
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionCallAccountHealth.selector
         });
         vm.prank(user1);
@@ -2747,7 +2793,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register batch assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2794,7 +2840,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -2813,7 +2859,7 @@ contract TestAccountHealthAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 

@@ -9,6 +9,7 @@ import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.so
 import {ERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import {ERC4626} from "lib/openzeppelin-contracts/contracts/token/ERC20/extensions/ERC4626.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title TestVaultSharePriceAssertion
 /// @notice Comprehensive test suite for the VaultSharePriceAssertion assertion
@@ -28,11 +29,23 @@ contract TestVaultSharePriceAssertion is BaseTest {
     // Controller vault for controlCollateral tests
     MockControllerVault public controllerVault;
 
+    // Mock perspective for vault verification
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    /// @dev Passes the mockPerspective address to the assertion constructor
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(VaultSharePriceAssertion).creationCode, abi.encode(perspectives));
+    }
+
     function setUp() public override {
         super.setUp();
 
-        // Deploy assertion
-        assertion = new VaultSharePriceAssertion();
+        // Deploy MockPerspective FIRST (before vaults)
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false); // Only verify explicitly added vaults
 
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
@@ -43,6 +56,16 @@ contract TestVaultSharePriceAssertion is BaseTest {
         vault1 = new MockERC4626Vault(token1);
         vault2 = new MockERC4626Vault(token2);
         vault3 = new MockERC4626Vault(token3);
+
+        // Register vaults with the perspective
+        mockPerspective.addVerifiedVault(address(vault1));
+        mockPerspective.addVerifiedVault(address(vault2));
+        mockPerspective.addVerifiedVault(address(vault3));
+
+        // Deploy assertion with perspective
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        assertion = new VaultSharePriceAssertion(perspectives);
 
         // Deploy controller vault
         controllerVault = new MockControllerVault();
@@ -75,7 +98,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for the batch call (this will trigger on the next call)
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -105,7 +128,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -135,7 +158,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -164,7 +187,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for the batch call
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -210,7 +233,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -231,7 +254,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionCallSharePriceInvariant.selector
         });
 
@@ -254,7 +277,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionCallSharePriceInvariant.selector
         });
 
@@ -285,7 +308,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionControlCollateralSharePriceInvariant.selector
         });
 
@@ -317,7 +340,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionControlCollateralSharePriceInvariant.selector
         });
 
@@ -343,7 +366,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -367,7 +390,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -395,7 +418,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for next transaction
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -437,7 +460,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion for batch operation
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -500,7 +523,7 @@ contract TestVaultSharePriceAssertion is BaseTest {
         // Register assertion
         cl.assertion({
             adopter: address(evc),
-            createData: type(VaultSharePriceAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: VaultSharePriceAssertion.assertionBatchSharePriceInvariant.selector
         });
 
@@ -599,7 +622,11 @@ contract MockERC4626Vault is ERC4626 {
     /// @notice Simulates a deposit with specific assets and shares
     /// @dev Used to test the VIRTUAL_DEPOSIT formula by creating deposits at specific ratios
     /// that would trigger false positives without the correct formula
-    function simulateDeposit(uint256 assets, uint256 shares, address receiver) external {
+    function simulateDeposit(
+        uint256 assets,
+        uint256 shares,
+        address receiver
+    ) external {
         _totalAssets += assets;
         _mint(receiver, shares);
     }
@@ -610,20 +637,34 @@ contract MockERC4626Vault is ERC4626 {
     }
 
     // Required ERC4626 functions (simplified for testing)
-    function deposit(uint256, address) public pure override returns (uint256) {
+    function deposit(
+        uint256,
+        address
+    ) public pure override returns (uint256) {
         revert("Not implemented for testing");
     }
 
-    function mint(uint256 shares, address receiver) public override returns (uint256) {
+    function mint(
+        uint256 shares,
+        address receiver
+    ) public override returns (uint256) {
         _mint(receiver, shares);
         return shares;
     }
 
-    function withdraw(uint256, address, address) public pure override returns (uint256) {
+    function withdraw(
+        uint256,
+        address,
+        address
+    ) public pure override returns (uint256) {
         revert("Not implemented for testing");
     }
 
-    function redeem(uint256, address, address) public pure override returns (uint256) {
+    function redeem(
+        uint256,
+        address,
+        address
+    ) public pure override returns (uint256) {
         revert("Not implemented for testing");
     }
 
@@ -694,7 +735,10 @@ contract MockControllerVault {
     // Simple controller vault that can be used for controlCollateral tests
     // Implements the required checkAccountStatus function that EVC expects from controllers
 
-    function checkAccountStatus(address, address[] memory) external pure returns (bytes4) {
+    function checkAccountStatus(
+        address,
+        address[] memory
+    ) external pure returns (bytes4) {
         return this.checkAccountStatus.selector;
     }
 }

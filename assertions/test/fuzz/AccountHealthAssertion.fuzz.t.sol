@@ -7,6 +7,7 @@ import {IEVC} from "../../../src/interfaces/IEthereumVaultConnector.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockVault} from "../mocks/MockVault.sol";
 import {MockEVault} from "../mocks/MockEVault.sol";
+import {MockPerspective} from "../mocks/MockPerspective.sol";
 
 /// @title AccountHealthAssertion Fuzz Tests
 /// @notice Fuzz testing for critical AccountHealthAssertion scenarios
@@ -23,11 +24,22 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
     MockERC20 public token2;
     MockERC20 public asset;
 
+    // Mock perspective for vault verification
+    MockPerspective public mockPerspective;
+
+    /// @notice Helper to get assertion creation code with MockPerspective
+    function getAssertionCreationCode() internal view returns (bytes memory) {
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        return abi.encodePacked(type(AccountHealthAssertion).creationCode, abi.encode(perspectives));
+    }
+
     function setUp() public override {
         super.setUp();
 
-        // Deploy assertion
-        assertion = new AccountHealthAssertion();
+        // Deploy MockPerspective FIRST
+        mockPerspective = new MockPerspective();
+        mockPerspective.setVerifyAll(false);
 
         // Deploy test tokens
         token1 = new MockERC20("Test Token 1", "TT1");
@@ -37,6 +49,15 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
         // Deploy test vaults
         vault1 = new MockVault(address(evc), address(token1));
         vault2 = new MockVault(address(evc), address(token2));
+
+        // Register vaults with perspective
+        mockPerspective.addVerifiedVault(address(vault1));
+        mockPerspective.addVerifiedVault(address(vault2));
+
+        // Deploy assertion with perspective
+        address[] memory perspectives = new address[](1);
+        perspectives[0] = address(mockPerspective);
+        assertion = new AccountHealthAssertion(perspectives);
 
         // Setup test environment
         setupUserETH();
@@ -50,7 +71,10 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
     /// @dev Tests the invariant that borrowing within collateral limits maintains health
     /// @param borrowAmount Amount to borrow (bounded to realistic range)
     /// @param collateralAmount Amount of collateral (bounded to >= borrowAmount)
-    function testFuzz_HealthyBorrow(uint256 borrowAmount, uint256 collateralAmount) public {
+    function testFuzz_HealthyBorrow(
+        uint256 borrowAmount,
+        uint256 collateralAmount
+    ) public {
         // Bound inputs to realistic ranges
         borrowAmount = bound(borrowAmount, 1e18, 1000e18);
         collateralAmount = bound(collateralAmount, borrowAmount, 10000e18);
@@ -83,7 +107,7 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the borrow operation
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -106,7 +130,11 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
     /// @param initialDebt Initial debt amount (bounded)
     /// @param extraDebt Additional debt that will cause unhealthy state (bounded)
     /// @param collateral Collateral amount (bounded to create transition scenario)
-    function testFuzz_HealthyBecomesUnhealthy(uint256 initialDebt, uint256 extraDebt, uint256 collateral) public {
+    function testFuzz_HealthyBecomesUnhealthy(
+        uint256 initialDebt,
+        uint256 extraDebt,
+        uint256 collateral
+    ) public {
         // Bound inputs to realistic ranges
         initialDebt = bound(initialDebt, 1e18, 100e18);
         extraDebt = bound(extraDebt, 1e18, 100e18);
@@ -150,7 +178,7 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE the operation that breaks health
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 
@@ -218,7 +246,7 @@ contract AccountHealthAssertionFuzzTest is BaseTest {
         // Register assertion BEFORE debt repayment
         cl.assertion({
             adopter: address(evc),
-            createData: type(AccountHealthAssertion).creationCode,
+            createData: getAssertionCreationCode(),
             fnSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector
         });
 

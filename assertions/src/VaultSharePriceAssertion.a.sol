@@ -5,6 +5,7 @@ import {Assertion} from "credible-std/Assertion.sol";
 import {PhEvm} from "credible-std/PhEvm.sol";
 import {IEVC} from "../../src/interfaces/IEthereumVaultConnector.sol";
 import {IERC4626} from "lib/openzeppelin-contracts/contracts/interfaces/IERC4626.sol";
+import {IPerspective} from "./interfaces/IPerspective.sol";
 
 /// @title VaultSharePriceAssertion
 /// @notice Monitors Euler vault share prices and ensures they don't decrease unless bad debt socialization occurs
@@ -47,8 +48,42 @@ contract VaultSharePriceAssertion is Assertion {
     /// @dev Per EVK ConversionHelpers.sol: "virtual deposit used in conversions between shares and assets,
     ///      serving as exchange rate manipulation mitigation"
     uint256 internal constant VIRTUAL_DEPOSIT_AMOUNT = 1e6;
-    /// @notice Register triggers for EVC operations
 
+    /// @notice Array of perspectives to check for vault verification
+    /// @dev Includes GovernedPerspective and EscrowedCollateralPerspective
+    IPerspective[] public perspectives;
+
+    /// @notice Constructor to set the perspectives for vault verification
+    /// @param _perspectives Array of perspective contract addresses
+    constructor(
+        address[] memory _perspectives
+    ) {
+        for (uint256 i = 0; i < _perspectives.length; i++) {
+            perspectives.push(IPerspective(_perspectives[i]));
+        }
+    }
+
+    /// @notice Checks if vault is verified in any of the perspectives
+    /// @param vault The vault address to check
+    /// @return True if the vault is verified in at least one perspective, or if no perspectives configured
+    function isVerifiedVault(
+        address vault
+    ) internal view returns (bool) {
+        // If no perspectives configured, verify all vaults (for testing compatibility)
+        if (perspectives.length == 0) return true;
+
+        for (uint256 i = 0; i < perspectives.length; i++) {
+            try perspectives[i].isVerified(vault) returns (bool verified) {
+                if (verified) return true;
+            } catch {
+                // Perspective call failed, skip this perspective
+                continue;
+            }
+        }
+        return false;
+    }
+
+    /// @notice Register triggers for EVC operations
     function triggers() external view override {
         // Register triggers for each call type
         registerCallTrigger(this.assertionBatchSharePriceInvariant.selector, IEVC.batch.selector);
@@ -74,7 +109,12 @@ contract VaultSharePriceAssertion is Assertion {
 
             // Process all vaults in this batch call
             for (uint256 j = 0; j < items.length; j++) {
-                validateVaultSharePriceInvariant(items[j].targetContract);
+                address vault = items[j].targetContract;
+
+                // Skip non-verified vaults (filters out WETH, Permit2, routers, EOAs, etc.)
+                if (!isVerifiedVault(vault)) continue;
+
+                validateVaultSharePriceInvariant(vault);
             }
         }
     }
@@ -93,6 +133,9 @@ contract VaultSharePriceAssertion is Assertion {
             // Decode call parameters directly: (address targetContract, address onBehalfOfAccount, uint256 value, bytes
             // data)
             (address targetContract,,,) = abi.decode(singleCalls[i].input, (address, address, uint256, bytes));
+
+            // Skip non-verified vaults
+            if (!isVerifiedVault(targetContract)) continue;
 
             // Validate share price for the target contract (vault)
             validateVaultSharePriceInvariant(targetContract);
@@ -114,6 +157,9 @@ contract VaultSharePriceAssertion is Assertion {
             // uint256 value, bytes data)
             (address targetCollateral,,,) = abi.decode(controlCalls[i].input, (address, address, uint256, bytes));
 
+            // Skip non-verified vaults
+            if (!isVerifiedVault(targetCollateral)) continue;
+
             // Validate share price for the target collateral (vault)
             validateVaultSharePriceInvariant(targetCollateral);
         }
@@ -124,9 +170,6 @@ contract VaultSharePriceAssertion is Assertion {
     function validateVaultSharePriceInvariant(
         address vault
     ) internal {
-        // Skip non-contract addresses
-        if (vault.code.length == 0) return;
-
         // Get pre-transaction share price
         ph.forkPreTx();
         uint256 preSharePrice = getSharePrice(vault);
@@ -151,26 +194,12 @@ contract VaultSharePriceAssertion is Assertion {
     /// @param vault The vault address
     /// @return sharePrice The share price using Euler's formula: (totalAssets + VD) * 1e18 / (totalSupply + VD)
     /// @dev Uses VIRTUAL_DEPOSIT_AMOUNT (1e6) as per EVK ConversionHelpers.sol to match Euler's internal
-    ///      exchange rate calculation and prevent false positives from exchange rate manipulation protection
+    ///      exchange rate calculation and prevent false positives from exchange rate manipulation protection.
     function getSharePrice(
         address vault
     ) internal view returns (uint256 sharePrice) {
-        // Get totalAssets and totalSupply from ERC4626 interface
-        // Use try-catch because the contract might not be ERC4626 (e.g., non-vault in batch)
-        uint256 totalAssets;
-        uint256 totalSupply;
-
-        try IERC4626(vault).totalAssets() returns (uint256 assets) {
-            totalAssets = assets;
-        } catch {
-            return 0; // Not an ERC4626 vault, return 0 to skip
-        }
-
-        try IERC4626(vault).totalSupply() returns (uint256 supply) {
-            totalSupply = supply;
-        } catch {
-            return 0; // Not an ERC4626 vault, return 0 to skip
-        }
+        uint256 totalAssets = IERC4626(vault).totalAssets();
+        uint256 totalSupply = IERC4626(vault).totalSupply();
 
         // Calculate share price using Euler's formula with VIRTUAL_DEPOSIT_AMOUNT
         // This matches EVK's ConversionHelpers.conversionTotals() which adds VIRTUAL_DEPOSIT_AMOUNT
