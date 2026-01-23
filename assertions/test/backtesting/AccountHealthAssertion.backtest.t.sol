@@ -60,25 +60,6 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 assertionSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: false,
-                forkByTxHash: true
-            })
-        );
-    }
-
-    /// @notice Backtest batch operations against mainnet EVC
-    /// @dev Tests assertionBatchAccountHealth against 10 blocks of real transactions
-    function testBacktest_EVC_BatchOperations_traceFilter() public {
-        BacktestingTypes.BacktestingResults memory results = executeBacktest(
-            BacktestingTypes.BacktestingConfig({
-                targetContract: EVC_MAINNET,
-                endBlock: END_BLOCK,
-                blockRange: BLOCK_RANGE,
-                assertionCreationCode: getMainnetAssertionCreationCode(),
-                assertionSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector,
-                rpcUrl: vm.envString("MAINNET_RPC_URL"),
-                detailedBlocks: false,
-                useTraceFilter: true,
                 forkByTxHash: true
             })
         );
@@ -96,7 +77,6 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 assertionSelector: AccountHealthAssertion.assertionBatchAccountHealth.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: true,
-                useTraceFilter: false,
                 forkByTxHash: true
             })
         );
@@ -114,7 +94,6 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 assertionSelector: AccountHealthAssertion.assertionCallAccountHealth.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: true,
                 forkByTxHash: true
             })
         );
@@ -132,9 +111,30 @@ contract AccountHealthAssertionBacktest is CredibleTestWithBacktesting {
                 assertionSelector: AccountHealthAssertion.assertionControlCollateralAccountHealth.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: false,
                 forkByTxHash: true
             })
         );
+    }
+
+    /// @notice Single transaction backtest for AccountHealthAssertion on Linea
+    /// @dev Tests the batch account health assertion against a specific transaction
+    function testBacktest_singleTx_lineaMainnet_AccountHealthAssertion() public {
+        // Use LINEA_RPC_URL if available, fallback to MAINNET_RPC_URL for local testing
+        string memory rpcUrl;
+        try vm.envString("LINEA_RPC_URL") returns (string memory url) {
+            rpcUrl = url;
+        } catch {
+            rpcUrl = vm.envString("MAINNET_RPC_URL");
+        }
+
+        BacktestingTypes.BacktestingResults memory results = executeBacktestForTransaction(
+            0xf2f84d5a619a1645f5530ae61613be751f277b6571e81e75c4a751c6cb1753ac,
+            EVC_LINEA,
+            getLineaAssertionCreationCode(),
+            AccountHealthAssertion.assertionBatchAccountHealth.selector,
+            rpcUrl
+        );
+
+        assertEq(results.assertionFailures, 0, "Single tx backtest should pass");
     }
 }

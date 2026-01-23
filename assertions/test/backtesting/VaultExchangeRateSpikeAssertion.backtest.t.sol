@@ -55,7 +55,6 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
                 assertionSelector: VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: false,
                 forkByTxHash: true
             })
         );
@@ -76,7 +75,6 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
                 assertionSelector: VaultExchangeRateSpikeAssertion.assertionCallExchangeRateSpike.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: false,
                 forkByTxHash: true
             })
         );
@@ -96,11 +94,32 @@ contract VaultExchangeRateSpikeAssertionBacktest is CredibleTestWithBacktesting 
                 assertionSelector: VaultExchangeRateSpikeAssertion.assertionControlCollateralExchangeRateSpike.selector,
                 rpcUrl: vm.envString("MAINNET_RPC_URL"),
                 detailedBlocks: false,
-                useTraceFilter: false,
                 forkByTxHash: true
             })
         );
 
         assertEq(results.assertionFailures, 0, "Should not detect violations in healthy protocol");
+    }
+
+    /// @notice Single transaction backtest for VaultExchangeRateSpikeAssertion on Linea
+    /// @dev Tests the batch exchange rate spike assertion against a specific transaction
+    function testBacktest_singleTx_lineaMainnet_VaultExchangeRateSpikeAssertion() public {
+        // Use LINEA_RPC_URL if available, fallback to MAINNET_RPC_URL for local testing
+        string memory rpcUrl;
+        try vm.envString("LINEA_RPC_URL") returns (string memory url) {
+            rpcUrl = url;
+        } catch {
+            rpcUrl = vm.envString("MAINNET_RPC_URL");
+        }
+
+        BacktestingTypes.BacktestingResults memory results = executeBacktestForTransaction(
+            0xf2f84d5a619a1645f5530ae61613be751f277b6571e81e75c4a751c6cb1753ac,
+            EVC_LINEA,
+            getLineaAssertionCreationCode(),
+            VaultExchangeRateSpikeAssertion.assertionBatchExchangeRateSpike.selector,
+            rpcUrl
+        );
+
+        assertEq(results.assertionFailures, 0, "Single tx backtest should pass");
     }
 }
